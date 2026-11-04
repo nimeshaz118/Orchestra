@@ -1,0 +1,37 @@
+# Local environment and secrets
+.env
+.env.*
+!.env.example
+*.user
+*.local
+
+# Python
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# Node.js and frontend output
+node_modules/
+dist/
+coverage/
+npm-debug.log*
+
+# .NET output
+bin/
+obj/
+
+# Local database and container data
+*.sqlite
+*.sqlite3
+infrastructure/.volumes/
+
+# IDE and operating-system files
+.idea/
+.vscode/
+*.suo
+*.userosscache
+*.sln.docstates
+Thumbs.db
+Desktop.ini
