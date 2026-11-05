@@ -13,6 +13,7 @@ __pycache__/
 .pytest_cache/
 
 # Node.js and frontend output
+.tools/
 node_modules/
 dist/
 coverage/
