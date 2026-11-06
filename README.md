@@ -1,10 +1,25 @@
 # Orchestra
 The platform provides enterprise teams with one governed interface for AI chat and questions about approved documents. It automatically selects eligible models and enforces credits and records usage.  One React application serves User, Admin and Super Admin through role and department configuration.
 
+## Where things live
+
+| Path | Purpose |
+| --- | --- |
+| `src/backend/Orchestra.Api/Modules/` | API features: Auth, Departments, and Users |
+| `src/backend/Orchestra.Api/Data/` and `Models/Entities/` | Database-first EF Core context and generated entities; keep custom partial mappings in `Data/` |
+| `src/frontend/` | React application |
+| `src/ai-service/` | Python AI service setup and locked dependencies |
+| `infrastructure/database/migrations/` | Reviewed SQL schema, starting with `001_initial_schema.sql` |
+| `tests/Orchestra.Api.Tests/` | API and PostgreSQL integration tests |
+| `docs/api/` | API setup and endpoint notes |
+| `docs/development-setup.md` | Local tools and development setup |
+
+Start with [development setup](docs/development-setup.md) for tools, then [authentication API setup](docs/api/authentication.md) for database connection, User Secrets, and endpoints. Run the .NET solution from the repository root.
+
 
 # Orchestra AI Orchestration Platform — Implementation Context
 
-Last reviewed: 2026-11-04  
+Last reviewed: 2026-11-06
 Project stage: Development foundation  
 
 
@@ -16,9 +31,9 @@ Rules for coding assistants:
 
 1. Preserve the confirmed decisions in this file.
 2. Do not restore requirements that are explicitly removed.
-3. Do not invent a final database schema. The ER diagram and database design are still being finalized.
-4. Do not create or apply permanent database migrations until the team approves the final ER diagram.
-5. When a requested change conflicts with this file, explain the conflict and ask which requirement is newer.
+3. Use `infrastructure/database/migrations/001_initial_schema.sql` as the approved database baseline.
+4. The project uses EF Core database-first. Apply reviewed SQL changes, then re-scaffold and commit the generated model. Do not create EF migrations for these tables.
+5. The current user request takes precedence when it updates a decision recorded here.
 6. Keep implementations simple enough for a five-member university project team.
 7. Prefer clear code, small modules, documented contracts, and reliable behavior over unnecessary abstractions.
 8. Use the existing design system and API conventions. Do not independently redesign the product.
@@ -72,7 +87,8 @@ The system has exactly three application roles.
 Important scope rules:
 
 - There is one organization in the initial release.
-- There is initially one Admin for the system. Keep authorization role-based so another Admin could be supported later without rewriting authentication.
+- There is initially one Admin and one Super Admin for the system. The approved SQL schema enforces at most one active account for each privileged role.
+- Super Admin can use every Admin endpoint in addition to Super Admin endpoints.
 - A department is selected during registration, not during sign-in.
 - The backend must enforce role, ownership, department, account status, feature status, and credit rules. Hiding a button in React is not authorization.
 - A User must never access another user's conversation or usage record by changing an ID.
@@ -87,7 +103,7 @@ React + TypeScript
         v
 ASP.NET Core modular monolith
         |-----------------------> PostgreSQL
-        |                          Application data and EF Core migrations
+|                          Application data and reviewed SQL migrations
         |
         | Private /internal/v1 API
         v
@@ -104,13 +120,13 @@ ASP.NET Core --------------------> Resend
 
 - React communicates only with ASP.NET Core.
 - ASP.NET Core is the only public backend.
-- ASP.NET Core owns authentication, authorization, business rules, credits, user-visible data, reporting coordination, audit records, and PostgreSQL migrations.
+- ASP.NET Core owns authentication, authorization, business rules, credits, user-visible data, reporting coordination, and audit records. Reviewed SQL files own PostgreSQL schema changes.
 - FastAPI is a private AI service. It owns intent/routing logic, LangChain prompt construction, NVIDIA provider calls, normalized AI results, and later token streaming.
 - FastAPI must not trust a user ID, role, department ID, or model list received from the browser.
 - ASP.NET Core calls FastAPI using a private service credential and supplies already validated policy constraints.
 - FastAPI must not accept user refresh tokens.
 - During the current non-RAG phase, FastAPI should not write application tables directly. It returns results and usage metadata to ASP.NET Core.
-- A future RAG worker may receive limited database access through a separate restricted database account, but schema ownership must remain in one coordinated migration process.
+- A future RAG worker may receive limited database access through a separate restricted database account, but schema ownership must remain in the reviewed SQL migration process.
 - Resend delivers email only. ASP.NET Core generates, stores, expires, and validates verification codes.
 - PostgreSQL is never exposed directly to React.
 
@@ -129,7 +145,7 @@ ASP.NET Core --------------------> Resend
 | Database | PostgreSQL 18.x; pgvector may be installed for future use but is not used now |
 | Authentication | ASP.NET Core Identity-compatible password hashing, JWT access tokens, rotating refresh tokens |
 | Email delivery | Resend |
-| Local infrastructure | Docker Desktop with Docker Compose v2 |
+| Local infrastructure | Local PostgreSQL; Docker Compose can be added later |
 | Source control | GitHub using `main`, `develop`, and short-lived feature branches |
 
 ### Version rules
@@ -137,112 +153,50 @@ ASP.NET Core --------------------> Resend
 - Pin Node.js 26.13.0 LTS with `.nvmrc` and commit `package-lock.json`.
 - Use the React and TypeScript versions generated by the approved Vite scaffold and lock them in `package-lock.json`.
 - Pin the .NET SDK with `global.json` within the .NET 10 LTS release line.
-- Pin Python with `.python-version` to the selected Python 3.13.x patch and pin FastAPI in `src/ai-service/requirements.txt`.
-- Pin the PostgreSQL Docker image to the PostgreSQL 18.x major line.
-- Use Docker Desktop with Docker Compose v2 for local containers.
+- Pin Python with `.python-version` to the selected Python 3.13.x patch and declare Python packages in `src/ai-service/pyproject.toml` with `uv.lock`.
+- Use PostgreSQL 18.x for local databases.
 - Do not silently upgrade a major framework or runtime version.
 - When adding a dependency, explain why it is needed and avoid overlapping libraries that solve the same problem.
 
-## 6. Expected repository structure
+## 6. Repository structure
+
+The current project folders are:
 
 ```text
-orchestra/
-├── .github/
-│   ├── workflows/
-│   └── pull_request_template.md
-├── docs/
-│   ├── architecture/
-│   ├── api/
-│   └── development-setup.md
-├── infrastructure/
-│   ├── docker-compose.yml
-│   └── .env.example
-├── src/
-│   ├── frontend/
-│   │   └── src/
-│   │       ├── api/
-│   │       ├── components/
-│   │       ├── features/
-│   │       ├── layouts/
-│   │       ├── pages/
-│   │       ├── routes/
-│   │       ├── types/
-│   │       └── utils/
-│   ├── backend/
-│   │   └── Orchestra.Api/
-│   │       ├── Common/
-│   │       ├── Data/
-│   │       ├── Middleware/
-│   │       ├── Modules/
-│   │       │   ├── Auth/
-│   │       │   ├── Users/
-│   │       │   ├── Departments/
-│   │       │   ├── Conversations/
-│   │       │   ├── AiRequests/
-│   │       │   ├── Providers/
-│   │       │   ├── Credits/
-│   │       │   ├── Notifications/
-│   │       │   ├── Reports/
-│   │       │   ├── Configuration/
-│   │       │   └── AuditLogs/
-│   │       └── Program.cs
-│   └── ai-service/
-│       ├── app/
-│       │   ├── api/
-│       │   ├── core/
-│       │   ├── orchestration/
-│       │   ├── providers/
-│       │   ├── schemas/
-│       │   └── main.py
-│       └── requirements.txt
-├── tests/
-├── .gitignore
-├── .nvmrc
-├── .python-version
-├── global.json
-├── Orchestra.sln
-└── README.md
+Orchestra/
+  docs/
+    api/authentication.md       API routes and local secrets
+    development-setup.md        Local tool setup
+  infrastructure/database/migrations/
+    001_initial_schema.sql      Database-first PostgreSQL baseline
+  src/
+    backend/Orchestra.Api/
+      Common/                   Shared API errors
+      Data/                     Scaffolded DbContext and custom partial mapping
+      Models/Entities/          Scaffolded EF Core entities
+      Modules/
+        Auth/                   Authentication and email
+        Departments/            Department endpoints
+        Users/                  Own profile and sessions
+    frontend/                   React application
+    ai-service/                 Python dependency setup; service code is pending
+  tests/Orchestra.Api.Tests/     API and PostgreSQL integration tests
+  Orchestra.sln
 ```
 
-Do not split the .NET API into many deployable services. Keep business areas as modules inside one modular monolith.
+Add new API features under `Modules/`. Keep generated EF Core files in `Data/` and `Models/Entities/`; put custom behavior in separate partial files so re-scaffolding does not overwrite it.
 
-### Local development ports
+### Local development
 
-Use these defaults unless the committed configuration defines another value:
+PostgreSQL must be running with the [approved SQL schema](infrastructure/database/migrations/001_initial_schema.sql) applied. Configure the API's connection string and local secrets using the [authentication guide](docs/api/authentication.md).
 
-| Service | Local address |
-| --- | --- |
-| React | `http://localhost:5173` |
-| ASP.NET Core | `http://localhost:5000` |
-| FastAPI | `http://localhost:8000` |
-| PostgreSQL | `localhost:5432` |
+From the repository root, start the API with:
 
-Basic startup sequence:
-
-```bash
-# 1. Start PostgreSQL from the infrastructure directory
-docker compose up -d
-
-# 2. Start ASP.NET Core from the repository root
-dotnet restore
-dotnet run --project src/backend/Orchestra.Api --urls http://localhost:5000
-
-# 3. Start FastAPI from src/ai-service with its virtual environment active
-python -m pip install -r requirements.txt
-fastapi dev app/main.py --port 8000
-
-# 4. Start React from src/frontend
-npm ci
-npm run dev
+```powershell
+dotnet run --project src/backend/Orchestra.Api --launch-profile https
 ```
 
-Required health checks:
-
-- ASP.NET Core liveness: `/health/live`.
-- ASP.NET Core readiness, including required dependencies: `/health/ready`.
-- FastAPI liveness: `/health/live` on the private service.
-- FastAPI readiness: `/health/ready` on the private service.
-- PostgreSQL Docker health check should use `pg_isready`.
+The API listens on `https://localhost:7235`. From `src/frontend/`, run `npm ci` once and `npm run dev` to start React at `http://localhost:5173`. The Python service currently contains dependency setup but no runnable application entry point.
 
 ## 7. Backend implementation pattern
 
@@ -614,22 +568,13 @@ Use the approved Figma design as the visual source of truth.
 - Distinguish an ordinary disable from an emergency hard disable.
 - Explain consequences in confirmations for provider/model disables, limits, suspensions, credit changes, and emergency controls.
 
-## 16. Database status — provisional until EER approval
+## 16. Database status
 
-The EER diagram and database design are **not finalized**.
+The approved database-first baseline is `infrastructure/database/migrations/001_initial_schema.sql`. Apply reviewed SQL changes to PostgreSQL, then re-scaffold the EF Core context and entities. Keep `OrchestraDbContext.AuthMappings.cs` when re-scaffolding; it corrects the role relationship inferred from partial unique indexes. The earlier provisional guidance below has been superseded by this baseline.
 
-Until final approval:
+### Subject areas
 
-- Do not treat the entity list below as the final schema.
-- Do not generate final EF Core entities, foreign keys, unique constraints, indexes, or migrations from assumptions.
-- Infrastructure may start PostgreSQL and prove a connection.
-- The API may use interfaces, in-memory fakes, DTOs, and clearly marked temporary models for isolated foundation work.
-- If a temporary migration is absolutely needed for experimentation, keep it on an isolated branch and do not merge it as the production baseline without approval.
-- Do not create an `Organizations` table merely because older documents describe multi-organization support.
-
-### Expected subject areas for the final EER
-
-These are planning groups, not approved table names:
+The baseline covers these subject areas:
 
 - Identity: users, roles/claims, departments, account status, sessions/refresh tokens.
 - Verification: email-verification and password-reset challenges with purpose, hash, expiry, attempts, and consumed state.
@@ -655,7 +600,7 @@ These are planning groups, not approved table names:
 - Store only hashes for refresh tokens and one-time verification codes.
 - Keep credits, tokens, request counts, and monetary cost as different values.
 - Use explicit decimal precision for money and credit calculations; do not use floating-point values for accounting.
-- EF Core must remain the single migration owner for shared application tables.
+- Reviewed SQL migrations remain the single schema owner for shared application tables; EF Core models are generated from PostgreSQL.
 
 ## 17. Configuration and secrets
 
@@ -798,8 +743,8 @@ Write meaningful tests for business rules and risky integrations.
 Follow this order unless the sprint plan explicitly changes it.
 
 1. **Foundation:** repository structure, branches, version files, React, ASP.NET Core, FastAPI, PostgreSQL container, environment examples, health checks, and basic CI.
-2. **Finalize data design:** approve the EER diagram, entity definitions, relationships, constraints, indexes, and migration ownership.
-3. **Authentication:** registration, email verification, login, refresh, logout, password reset, current session, profile, and preferences.
+2. **Data design:** maintain the approved SQL baseline and re-scaffold EF Core after reviewed schema changes.
+3. **Authentication:** registration, email verification, login, refresh, logout, password reset, current session, profile, and sessions. Preferences are deferred.
 4. **Basic user chat:** conversations, messages, one NVIDIA model, non-streaming response, small history, safe errors, and persistence.
 5. **Credits:** allocation, reservation, settlement, release, adjustments, thresholds, blocking, and user usage view.
 6. **Admin:** users, departments, credits, configuration workflow, alerts, reports, and scoped audit events.
@@ -827,9 +772,6 @@ A task is complete when:
 
 The following items are still pending or must be confirmed from the final design documents:
 
-- Final EER diagram.
-- Final table/entity names, attributes, relationships, constraints, and indexes.
-- Final initial migration.
 - Final access-token and refresh-token lifetimes.
 - Final approved NVIDIA model list and exact capabilities.
 - Final pricing-to-credit conversion and pricing-version data.
@@ -849,6 +791,6 @@ When work depends on one of these decisions, implement only reversible scaffoldi
 - No direct React-to-FastAPI connection.
 - No direct React-to-database connection.
 - No plain verification codes, refresh tokens, passwords, or provider keys stored in the database.
-- No independent Python migrations over EF Core-owned application tables.
+- No independent Python migrations over the shared SQL-owned application tables.
 - No frontend-only authorization.
 
