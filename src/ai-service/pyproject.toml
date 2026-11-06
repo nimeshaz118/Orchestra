@@ -1,0 +1,16 @@
+[project]
+name = "orchestra-ai-service"
+version = "0.1.0"
+description = "Add your description here"
+authors = [
+    { name = "Anuruth Kaushalya", email = "2023cs089@stu.ucsc.cmb.ac.lk" }
+]
+requires-python = ">=3.13"
+dependencies = [
+    "fastapi==0.162.0",
+    "langchain>=1.4.9",
+    "langchain-core>=1.7.6",
+    "langchain-nvidia-ai-endpoints>=1.5.0",
+    "langgraph>=1.2.20",
+    "python-dotenv>=1.2.4",
+]
