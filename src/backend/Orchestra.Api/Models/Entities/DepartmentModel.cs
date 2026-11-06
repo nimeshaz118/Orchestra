@@ -13,17 +13,13 @@ public partial class DepartmentModel
 
     public DateTime CreatedAt { get; set; }
 
-    public Guid? CreatedBy { get; set; }
+    public DateTime UpdatedAt { get; set; }
 
-    public DateTime? UpdatedAt { get; set; }
-
-    public Guid? UpdatedBy { get; set; }
-
-    public virtual AppUser? CreatedByNavigation { get; set; }
+    public Guid? UpdatedByUserId { get; set; }
 
     public virtual Department Department { get; set; } = null!;
 
     public virtual AiModel Model { get; set; } = null!;
 
-    public virtual AppUser? UpdatedByNavigation { get; set; }
+    public virtual AppUser? UpdatedByUser { get; set; }
 }

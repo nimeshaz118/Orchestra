@@ -15,17 +15,13 @@ public partial class Conversation
 
     public DateTime CreatedAt { get; set; }
 
-    public Guid? CreatedBy { get; set; }
+    public DateTime UpdatedAt { get; set; }
 
-    public Guid? UpdatedBy { get; set; }
+    public DateTime? DeletedAt { get; set; }
 
-    public virtual ICollection<AiRequest> AiRequest { get; set; } = new List<AiRequest>();
-
-    public virtual AppUser? CreatedByNavigation { get; set; }
+    public virtual ICollection<AiRequest> AiRequests { get; set; } = new List<AiRequest>();
 
     public virtual Department Department { get; set; } = null!;
-
-    public virtual AppUser? UpdatedByNavigation { get; set; }
 
     public virtual AppUser User { get; set; } = null!;
 }

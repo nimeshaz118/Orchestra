@@ -9,45 +9,35 @@ public partial class CreditLedgerEntry
 
     public Guid CreditAccountId { get; set; }
 
-    public string TransactionType { get; set; } = null!;
+    public Guid? RequestId { get; set; }
+
+    public Guid? ReservationId { get; set; }
+
+    public string EntryType { get; set; } = null!;
 
     public decimal Amount { get; set; }
 
-    public decimal BalanceAfter { get; set; }
+    public decimal AvailableDelta { get; set; }
 
-    public string? ReferenceType { get; set; }
+    public decimal ReservedDelta { get; set; }
 
-    public Guid? ReferenceId { get; set; }
+    public decimal AvailableBalanceAfter { get; set; }
 
-    public string? IdempotencyKey { get; set; }
+    public decimal ReservedBalanceAfter { get; set; }
 
-    public Guid? RequestId { get; set; }
+    public string IdempotencyKey { get; set; } = null!;
 
     public string? Description { get; set; }
 
-    public Guid? PerformedBy { get; set; }
-
-    public Guid? DepartmentId { get; set; }
-
     public Guid CorrelationId { get; set; }
+
+    public Guid? PerformedByUserId { get; set; }
 
     public DateTime CreatedAt { get; set; }
 
-    public Guid? CreatedBy { get; set; }
-
-    public DateTime? UpdatedAt { get; set; }
-
-    public Guid? UpdatedBy { get; set; }
-
-    public virtual AppUser? CreatedByNavigation { get; set; }
-
     public virtual CreditAccount CreditAccount { get; set; } = null!;
 
-    public virtual Department? Department { get; set; }
-
-    public virtual AppUser? PerformedByNavigation { get; set; }
+    public virtual AppUser? PerformedByUser { get; set; }
 
     public virtual AiRequest? Request { get; set; }
-
-    public virtual AppUser? UpdatedByNavigation { get; set; }
 }

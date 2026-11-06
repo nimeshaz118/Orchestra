@@ -7,23 +7,29 @@ public partial class AiProvider
 {
     public Guid ProviderId { get; set; }
 
-    public string Name { get; set; } = null!;
+    public string ProviderName { get; set; } = null!;
+
+    public string BaseUrl { get; set; } = null!;
+
+    public string? CredentialReference { get; set; }
 
     public string Status { get; set; } = null!;
 
-    public string? BaseUrl { get; set; }
+    public int TimeoutSeconds { get; set; }
+
+    public string Configuration { get; set; } = null!;
 
     public DateTime CreatedAt { get; set; }
 
-    public Guid? CreatedBy { get; set; }
+    public DateTime UpdatedAt { get; set; }
 
-    public DateTime? UpdatedAt { get; set; }
+    public Guid? CreatedByUserId { get; set; }
 
-    public Guid? UpdatedBy { get; set; }
+    public Guid? UpdatedByUserId { get; set; }
 
-    public virtual ICollection<AiModel> AiModel { get; set; } = new List<AiModel>();
+    public virtual ICollection<AiModel> AiModels { get; set; } = new List<AiModel>();
 
-    public virtual AppUser? CreatedByNavigation { get; set; }
+    public virtual AppUser? CreatedByUser { get; set; }
 
-    public virtual AppUser? UpdatedByNavigation { get; set; }
+    public virtual AppUser? UpdatedByUser { get; set; }
 }
