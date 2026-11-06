@@ -9,9 +9,13 @@ public partial class ModelPricing
 
     public Guid ModelId { get; set; }
 
-    public decimal InputPricePerToken { get; set; }
+    public int VersionNumber { get; set; }
 
-    public decimal OutputPricePerToken { get; set; }
+    public string CurrencyCode { get; set; } = null!;
+
+    public decimal InputCostPerMillionTokens { get; set; }
+
+    public decimal OutputCostPerMillionTokens { get; set; }
 
     public DateTime EffectiveFrom { get; set; }
 
@@ -19,15 +23,11 @@ public partial class ModelPricing
 
     public DateTime CreatedAt { get; set; }
 
-    public Guid? CreatedBy { get; set; }
+    public Guid? CreatedByUserId { get; set; }
 
-    public DateTime? UpdatedAt { get; set; }
-
-    public Guid? UpdatedBy { get; set; }
-
-    public virtual AppUser? CreatedByNavigation { get; set; }
+    public virtual AppUser? CreatedByUser { get; set; }
 
     public virtual AiModel Model { get; set; } = null!;
 
-    public virtual AppUser? UpdatedByNavigation { get; set; }
+    public virtual ICollection<UsageRecord> UsageRecords { get; set; } = new List<UsageRecord>();
 }

@@ -11,11 +11,9 @@ public partial class AiResponse
 
     public string? ResponseText { get; set; }
 
-    public int InputTokens { get; set; }
+    public string? FinishReason { get; set; }
 
-    public int OutputTokens { get; set; }
-
-    public long? DurationMs { get; set; }
+    public DateTime CreatedAt { get; set; }
 
     public virtual AiRequest Request { get; set; } = null!;
 }

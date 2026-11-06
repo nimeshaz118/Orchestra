@@ -9,39 +9,37 @@ public partial class Department
 
     public string DepartmentName { get; set; } = null!;
 
-    public string DepartmentStatus { get; set; } = null!;
+    public string? Description { get; set; }
 
-    public string? DepartmentConfiguration { get; set; }
+    public string Status { get; set; } = null!;
 
-    public Guid OrganizationId { get; set; }
+    public string Configuration { get; set; } = null!;
 
     public DateTime CreatedAt { get; set; }
 
-    public Guid? CreatedBy { get; set; }
+    public DateTime UpdatedAt { get; set; }
 
-    public DateTime? UpdatedAt { get; set; }
+    public Guid? CreatedByUserId { get; set; }
 
-    public Guid? UpdatedBy { get; set; }
+    public Guid? UpdatedByUserId { get; set; }
 
-    public virtual ICollection<AdditionalCreditRequest> AdditionalCreditRequest { get; set; } = new List<AdditionalCreditRequest>();
+    public virtual ICollection<AdditionalCreditRequest> AdditionalCreditRequests { get; set; } = new List<AdditionalCreditRequest>();
 
-    public virtual ICollection<AuditLog> AuditLog { get; set; } = new List<AuditLog>();
+    public virtual ICollection<AppUser> AppUsers { get; set; } = new List<AppUser>();
 
-    public virtual ICollection<Conversation> Conversation { get; set; } = new List<Conversation>();
+    public virtual ICollection<AuditLog> AuditLogs { get; set; } = new List<AuditLog>();
 
-    public virtual AppUser? CreatedByNavigation { get; set; }
+    public virtual ICollection<Conversation> Conversations { get; set; } = new List<Conversation>();
 
-    public virtual ICollection<CreditAccount> CreditAccount { get; set; } = new List<CreditAccount>();
+    public virtual AppUser? CreatedByUser { get; set; }
 
-    public virtual ICollection<CreditLedgerEntry> CreditLedgerEntry { get; set; } = new List<CreditLedgerEntry>();
+    public virtual CreditAccount? CreditAccount { get; set; }
 
-    public virtual ICollection<DepartmentModel> DepartmentModel { get; set; } = new List<DepartmentModel>();
+    public virtual ICollection<DepartmentModel> DepartmentModels { get; set; } = new List<DepartmentModel>();
 
-    public virtual Organization Organization { get; set; } = null!;
+    public virtual ModelSelectionPolicy? ModelSelectionPolicy { get; set; }
 
-    public virtual ICollection<QuotaPolicy> QuotaPolicy { get; set; } = new List<QuotaPolicy>();
+    public virtual QuotaPolicy? QuotaPolicy { get; set; }
 
-    public virtual AppUser? UpdatedByNavigation { get; set; }
-
-    public virtual ICollection<UserDepartment> UserDepartment { get; set; } = new List<UserDepartment>();
+    public virtual AppUser? UpdatedByUser { get; set; }
 }
