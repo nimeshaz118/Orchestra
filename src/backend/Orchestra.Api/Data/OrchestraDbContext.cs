@@ -1273,21 +1273,29 @@ public partial class OrchestraDbContext : DbContext
                 .IsUnique();
 
             entity.Property(e => e.PreferenceId)
+                .HasColumnName("preference_id")
                 .HasDefaultValueSql("gen_random_uuid()");
 
             entity.Property(e => e.PreferenceKey)
+                .HasColumnName("preference_key")
                 .HasMaxLength(100);
 
             entity.Property(e => e.PreferenceValue)
+                .HasColumnName("preference_value")
                 .HasColumnType("jsonb");
 
             entity.Property(e => e.CreatedAt)
+                .HasColumnName("created_at")
                 .HasDefaultValueSql("now()");
 
             entity.Property(e => e.UpdatedAt)
+                .HasColumnName("updated_at")
                 .HasDefaultValueSql("now()");
 
-            entity.HasOne<AppUser>()
+            entity.Property(e => e.UserId)
+                .HasColumnName("user_id");
+
+            entity.HasOne(e => e.User)
                 .WithMany()
                 .HasForeignKey(e => e.UserId)
                 .OnDelete(DeleteBehavior.Cascade);

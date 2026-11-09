@@ -6,6 +6,7 @@ using Microsoft.AspNetCore.Identity;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using Orchestra.Api.Common;
+using Orchestra.Api.Controller.UserPreference;
 using Orchestra.Api.Data;
 using Orchestra.Api.Models.Entities;
 using Orchestra.Api.Modules.Auth;
@@ -26,6 +27,7 @@ builder.Services.AddDbContext<OrchestraDbContext>(options =>
 builder.Services.AddScoped<IPasswordHasher<AppUser>, PasswordHasher<AppUser>>();
 builder.Services.AddScoped<AuthService>();
 builder.Services.AddScoped<DepartmentsService>();
+builder.Services.AddScoped<UserPreferenceService>();
 builder.Services.AddSingleton<CodeService>();
 builder.Services.AddSingleton<TokenService>();
 builder.Services.AddHttpClient<IEmailSender, ResendEmailSender>(client =>

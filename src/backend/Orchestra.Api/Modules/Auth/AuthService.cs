@@ -1,4 +1,5 @@
 using System.Security.Claims;
+using System.Text.Json;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.EntityFrameworkCore;
 using Npgsql;
@@ -49,6 +50,15 @@ public sealed class AuthService(
         var challenge = NewChallenge(user, VerifyPurpose, plainCode);
         db.AppUsers.Add(user);
         db.VerificationCodes.Add(challenge);
+        db.UserPreferences.Add(new UserPreference
+        {
+            PreferenceId = Guid.NewGuid(),
+            UserId = user.UserId,
+            PreferenceKey = "colorTheme",
+            PreferenceValue = JsonSerializer.Serialize("Dark"),
+            CreatedAt = now,
+            UpdatedAt = now
+        });
         try { await db.SaveChangesAsync(ct); }
         catch (DbUpdateException ex) when (IsUniqueViolation(ex))
         {
@@ -235,12 +245,21 @@ public sealed class AuthService(
 
     public async Task<IReadOnlyList<SessionDto>> SessionsAsync(Guid userId, string? currentToken, CancellationToken ct)
     {
+        if (string.IsNullOrWhiteSpace(currentToken))
+            throw new ApiException(401, "INVALID_SESSION", "The session has expired.");
+
+        var currentHash = TokenService.HashOpaqueToken(currentToken);
+        var currentSession = await db.RefreshTokens.AsNoTracking()
+            .FirstOrDefaultAsync(t => t.TokenHash == currentHash && t.UserId == userId, ct);
+        if (currentSession is null || currentSession.RevokedAt is not null ||
+            currentSession.ExpiresAt <= DateTime.UtcNow)
+            throw new ApiException(401, "INVALID_SESSION", "The session has expired.");
+
         var sessions = await db.RefreshTokens.AsNoTracking()
             .Where(t => t.UserId == userId && t.RevokedAt == null && t.ExpiresAt > DateTime.UtcNow)
             .OrderByDescending(t => t.CreatedAt).Take(50).ToListAsync(ct);
-        var currentHash = currentToken is null ? null : TokenService.HashOpaqueToken(currentToken);
         return sessions.Select(t => new SessionDto(t.RefreshTokenId, t.CreatedAt, t.ExpiresAt,
-            t.LastUsedAt, t.UserAgent, t.TokenHash == currentHash)).ToList();
+            t.LastUsedAt, t.UserAgent, t.RefreshTokenId == currentSession.RefreshTokenId)).ToList();
     }
 
     private async Task IssueCodeAsync(AppUser user, string purpose, CancellationToken ct)
