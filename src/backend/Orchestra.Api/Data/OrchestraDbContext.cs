@@ -62,6 +62,8 @@ public partial class OrchestraDbContext : DbContext
 
     public virtual DbSet<UsageRecord> UsageRecords { get; set; }
 
+    public virtual DbSet<UserPreference> UserPreferences { get; set; }
+
     public virtual DbSet<VerificationCode> VerificationCodes { get; set; }
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
@@ -1259,6 +1261,36 @@ public partial class OrchestraDbContext : DbContext
             entity.HasOne(d => d.User).WithMany(p => p.VerificationCodes)
                 .HasForeignKey(d => d.UserId)
                 .HasConstraintName("verification_code_user_id_fkey");
+        });
+        
+        modelBuilder.Entity<UserPreference>(entity =>
+        {
+            entity.HasKey(e => e.PreferenceId);
+
+            entity.ToTable("user_preference", "ai_orchestration");
+
+            entity.HasIndex(e => new { e.UserId, e.PreferenceKey })
+                .IsUnique();
+
+            entity.Property(e => e.PreferenceId)
+                .HasDefaultValueSql("gen_random_uuid()");
+
+            entity.Property(e => e.PreferenceKey)
+                .HasMaxLength(100);
+
+            entity.Property(e => e.PreferenceValue)
+                .HasColumnType("jsonb");
+
+            entity.Property(e => e.CreatedAt)
+                .HasDefaultValueSql("now()");
+
+            entity.Property(e => e.UpdatedAt)
+                .HasDefaultValueSql("now()");
+
+            entity.HasOne<AppUser>()
+                .WithMany()
+                .HasForeignKey(e => e.UserId)
+                .OnDelete(DeleteBehavior.Cascade);
         });
 
         OnModelCreatingPartial(modelBuilder);
