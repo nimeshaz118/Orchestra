@@ -60,6 +60,18 @@ Use HTTPS locally (`https://localhost:7235` in the launch profile). Refresh toke
 
 The user creation endpoints never accept a role. The registered account is always `USER`. The initial Admin and Super Admin accounts are created only through bootstrap.
 
+## Postman walkthrough
+
+Use the `https://localhost:7235` API base URL from the HTTPS launch profile. Trust the local ASP.NET development certificate first. In Postman, enable its cookie jar for this host; the secure `orchestra_refresh` cookie is set by login and sent automatically on refresh and logout. Do not manually add the refresh token to a JSON body. Add `Authorization: Bearer <accessToken>` to the session request.
+
+1. Call `POST /api/v1/auth/login` with JSON `{ "email": "...", "password": "..." }`. Save `accessToken` from the JSON response. Confirm the response's `Set-Cookie` contains `Secure`, `HttpOnly`, `SameSite=None`, and `Path=/api/v1`.
+2. Call `GET /api/v1/auth/session` with the bearer token. It should return the current user's profile.
+3. Call `POST /api/v1/auth/refresh` with no body. Postman sends its stored cookie; the response contains a new access token and rotates the cookie. Use the new access token on `/auth/session` to confirm it works.
+4. To demonstrate reuse detection, copy the cookie value before step 3. After step 3, send another refresh request with the copied old cookie (edit the cookie for this request in Postman's cookie manager). It should return `401` with `SESSION_REUSED`; the remaining refresh tokens in that token family are revoked. Sign in again before continuing.
+5. To demonstrate current-device logout, sign in again and call `POST /api/v1/auth/logout`. Postman sends the current cookie; expect `204` and an expired `orchestra_refresh` cookie. A refresh attempt with the saved pre-logout cookie should return `401`. Clear the saved bearer token in Postman to match the frontend's behavior of dropping its in-memory access token on logout.
+
+For a disabled-account check, set the test account's database status to `INACTIVE` or `SUSPENDED` after login, then call refresh with its stored cookie. It should return `401` and clear the cookie. Restore the status to `ACTIVE` before signing in again. Refresh and logout accept requests without an `Origin` header for Postman; if you send an `Origin`, it must exactly match one of `Frontend:Origins`.
+
 ## Tests
 
 ```powershell

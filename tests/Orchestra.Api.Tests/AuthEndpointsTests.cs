@@ -67,11 +67,15 @@ public sealed class AuthEndpointsTests
         Assert.Equal(HttpStatusCode.OK, login.StatusCode);
         var body = await login.Content.ReadFromJsonAsync<LoginResponse>();
         Assert.False(string.IsNullOrEmpty(body?.AccessToken));
-        Assert.Contains(login.Headers.GetValues("Set-Cookie"),
-            value => value.Contains("httponly", StringComparison.OrdinalIgnoreCase));
-        Assert.Contains(login.Headers.GetValues("Set-Cookie"),
-            value => value.Contains("samesite=none", StringComparison.OrdinalIgnoreCase));
+        var cookie = Assert.Single(login.Headers.GetValues("Set-Cookie"));
+        Assert.Contains("httponly", cookie, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("secure", cookie, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("samesite=none", cookie, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("path=/api/v1", cookie, StringComparison.OrdinalIgnoreCase);
         client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", body!.AccessToken);
+        var session = await client.GetAsync("/api/v1/auth/session");
+        Assert.Equal(HttpStatusCode.OK, session.StatusCode);
+        Assert.Equal("person@example.test", (await session.Content.ReadFromJsonAsync<UserDto>())?.Email);
         var profile = await client.GetAsync("/api/v1/me");
         Assert.Equal(HttpStatusCode.OK, profile.StatusCode);
         Assert.Equal("person@example.test", (await profile.Content.ReadFromJsonAsync<UserDto>())?.Email);
@@ -81,6 +85,54 @@ public sealed class AuthEndpointsTests
         client.DefaultRequestHeaders.Add("Origin", "https://untrusted.example");
         Assert.Equal(HttpStatusCode.Forbidden,
             (await client.PostAsync("/api/v1/auth/refresh", null)).StatusCode);
+    }
+
+    [Fact]
+    public async Task Session_requires_a_valid_access_token_and_login_rejects_bad_credentials()
+    {
+        await using var host = new ApiHost();
+        await host.SeedUserAsync("person@example.test", "USER");
+        var client = host.CreateClient();
+
+        Assert.Equal(HttpStatusCode.Unauthorized,
+            (await client.GetAsync("/api/v1/auth/session")).StatusCode);
+        var failedLogin = await client.PostAsJsonAsync("/api/v1/auth/login",
+            new { email = "person@example.test", password = "incorrect-password" });
+        Assert.Equal(HttpStatusCode.Unauthorized, failedLogin.StatusCode);
+        Assert.Equal("INVALID_CREDENTIALS",
+            (await failedLogin.Content.ReadFromJsonAsync<ApiErrorForTest>())?.Code);
+        Assert.False(failedLogin.Headers.Contains("Set-Cookie"));
+    }
+
+    [Fact]
+    public async Task Logout_without_a_cookie_is_idempotent_and_clears_cookie()
+    {
+        await using var host = new ApiHost();
+        var response = await host.CreateClient().PostAsync("/api/v1/auth/logout", null);
+        Assert.Equal(HttpStatusCode.NoContent, response.StatusCode);
+        Assert.Contains(response.Headers.GetValues("Set-Cookie"),
+            value => value.StartsWith("orchestra_refresh=", StringComparison.OrdinalIgnoreCase) &&
+                value.Contains("expires=Thu, 01 Jan 1970", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public async Task Refresh_rejects_disabled_account_and_clears_refresh_cookie()
+    {
+        await using var host = new ApiHost();
+        await host.SeedUserAsync("disabled@example.test", "USER");
+        var refreshToken = TokenService.NewOpaqueToken();
+        await host.SeedDisabledUserRefreshTokenAsync("disabled@example.test", refreshToken);
+        using var client = host.CreateClient(new WebApplicationFactoryClientOptions { HandleCookies = false });
+        using var request = new HttpRequestMessage(HttpMethod.Post, "/api/v1/auth/refresh");
+        request.Headers.TryAddWithoutValidation("Cookie", $"orchestra_refresh={refreshToken}");
+
+        var response = await client.SendAsync(request);
+
+        Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
+        Assert.Equal("INVALID_SESSION", (await response.Content.ReadFromJsonAsync<ApiErrorForTest>())?.Code);
+        Assert.Contains(response.Headers.GetValues("Set-Cookie"),
+            value => value.StartsWith("orchestra_refresh=", StringComparison.OrdinalIgnoreCase) &&
+                value.Contains("expires=Thu, 01 Jan 1970", StringComparison.OrdinalIgnoreCase));
     }
 
     [Fact]
@@ -112,6 +164,7 @@ public sealed class AuthEndpointsTests
     }
 
     private sealed record DepartmentDtoForTest(Guid Id, string Name);
+    private sealed record ApiErrorForTest(string Code, string Message, string RequestId);
 }
 
 public sealed class ApiHost : WebApplicationFactory<Program>
@@ -129,7 +182,11 @@ public sealed class ApiHost : WebApplicationFactory<Program>
             ["Auth:CodeHashKey"] = new string('c', 48),
             ["DevelopmentEmail:AllowAnyDomain"] = "true",
             ["DevelopmentEmail:Recipient"] = "tester@example.test",
-            ["ConnectionStrings:OrchestraDb"] = "Host=localhost;Database=unused"
+            ["ConnectionStrings:OrchestraDb"] = "Host=localhost;Database=unused",
+            ["Bootstrap:Admin:Email"] = "",
+            ["Bootstrap:Admin:Password"] = "",
+            ["Bootstrap:SuperAdmin:Email"] = "",
+            ["Bootstrap:SuperAdmin:Password"] = ""
         }));
         builder.ConfigureServices(services =>
         {
@@ -171,6 +228,21 @@ public sealed class ApiHost : WebApplicationFactory<Program>
         };
         user.PasswordHash = new PasswordHasher<AppUser>().HashPassword(user, "long-passphrase-123");
         db.AppUsers.Add(user);
+        await db.SaveChangesAsync();
+    }
+
+    public async Task SeedDisabledUserRefreshTokenAsync(string email, string plainToken)
+    {
+        using var scope = Services.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<OrchestraDbContext>();
+        var user = await db.AppUsers.SingleAsync(u => u.Email == email);
+        user.Status = "INACTIVE";
+        db.RefreshTokens.Add(new RefreshToken
+        {
+            RefreshTokenId = Guid.NewGuid(), UserId = user.UserId,
+            TokenHash = TokenService.HashOpaqueToken(plainToken), FamilyId = Guid.NewGuid(),
+            CreatedAt = DateTime.UtcNow, ExpiresAt = DateTime.UtcNow.AddDays(1)
+        });
         await db.SaveChangesAsync();
     }
 

@@ -57,10 +57,10 @@ public sealed class AuthController(AuthService auth, IConfiguration configuratio
             SetRefreshCookie(result.RefreshToken);
             return Ok(result.Response);
         }
-        catch (ApiException)
+        catch (ApiException ex)
         {
             ClearRefreshCookie();
-            throw;
+            return StatusCode(ex.StatusCode, Error(ex.Code, ex.Message));
         }
     }
 

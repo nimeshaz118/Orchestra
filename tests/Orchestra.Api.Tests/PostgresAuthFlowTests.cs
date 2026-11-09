@@ -119,6 +119,10 @@ public sealed class PostgresAuthFlowTests
             var oldAccess = (await login.Content.ReadFromJsonAsync<LoginResponse>())!.AccessToken;
             var rotated = await client.PostAsync("/api/v1/auth/refresh", null);
             Assert.Equal(HttpStatusCode.OK, rotated.StatusCode);
+            var rotatedCookie = rotated.Headers.GetValues("Set-Cookie").Single().Split(';')[0];
+            Assert.NotEqual(oldCookie, rotatedCookie);
+            Assert.False(string.IsNullOrWhiteSpace(
+                (await rotated.Content.ReadFromJsonAsync<LoginResponse>())?.AccessToken));
             using var replayClient = host.CreateClient(new WebApplicationFactoryClientOptions
             {
                 HandleCookies = false, BaseAddress = new Uri("https://localhost")
@@ -128,6 +132,20 @@ public sealed class PostgresAuthFlowTests
             Assert.Equal(HttpStatusCode.Unauthorized, (await replayClient.SendAsync(replay)).StatusCode);
             Assert.Equal(HttpStatusCode.Unauthorized,
                 (await client.PostAsync("/api/v1/auth/refresh", null)).StatusCode);
+
+            var logoutLogin = await client.PostAsJsonAsync("/api/v1/auth/login",
+                new { email = "integration@example.test", password = "long-passphrase-123" });
+            Assert.Equal(HttpStatusCode.OK, logoutLogin.StatusCode);
+            var logoutCookie = logoutLogin.Headers.GetValues("Set-Cookie").Single().Split(';')[0];
+            using var logoutRequest = new HttpRequestMessage(HttpMethod.Post, "/api/v1/auth/logout");
+            logoutRequest.Headers.TryAddWithoutValidation("Cookie", logoutCookie);
+            var logout = await client.SendAsync(logoutRequest);
+            Assert.Equal(HttpStatusCode.NoContent, logout.StatusCode);
+            Assert.Contains(logout.Headers.GetValues("Set-Cookie"),
+                value => value.StartsWith("orchestra_refresh=", StringComparison.OrdinalIgnoreCase));
+            using var loggedOutRefresh = new HttpRequestMessage(HttpMethod.Post, "/api/v1/auth/refresh");
+            loggedOutRefresh.Headers.TryAddWithoutValidation("Cookie", logoutCookie);
+            Assert.Equal(HttpStatusCode.Unauthorized, (await replayClient.SendAsync(loggedOutRefresh)).StatusCode);
 
             Assert.Equal(HttpStatusCode.OK, (await client.PostAsJsonAsync("/api/v1/auth/forgot-password",
                 new { email = "integration@example.test" })).StatusCode);
