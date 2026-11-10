@@ -30,3 +30,4 @@ public sealed record UserDto(Guid Id, string Email, string FirstName, string Las
 public sealed record LoginResponse(string AccessToken, DateTime ExpiresAt, UserDto User);
 public sealed record SessionDto(Guid Id, DateTime CreatedAt, DateTime ExpiresAt,
     DateTime? LastUsedAt, string? UserAgent, bool IsCurrent);
+public sealed record LogoutResponse(string Message);

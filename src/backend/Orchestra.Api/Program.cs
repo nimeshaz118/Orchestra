@@ -46,21 +46,45 @@ builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
         options.TokenValidationParameters = new TokenService(settings).ValidationParameters();
         options.Events = new JwtBearerEvents
         {
+            OnChallenge = async context =>
+            {
+                context.HandleResponse();
+                var disabled = context.HttpContext.Items.ContainsKey("AccountUnavailable");
+                context.Response.StatusCode = disabled ? 403 : 401;
+                if (!disabled) context.Response.Headers.WWWAuthenticate = "Bearer";
+                await context.Response.WriteAsJsonAsync(new ApiError(
+                    disabled ? "ACCOUNT_DISABLED" : "INVALID_SESSION",
+                    disabled ? "This account is unavailable." : "Please sign in again.",
+                    context.HttpContext.TraceIdentifier));
+            },
             OnTokenValidated = async context =>
             {
                 var rawId = context.Principal?.FindFirstValue(JwtRegisteredClaimNames.Sub);
                 var rawStamp = context.Principal?.FindFirstValue("stamp");
-                if (!Guid.TryParse(rawId, out var id) || !Guid.TryParse(rawStamp, out var stamp))
+                if (!Guid.TryParse(rawId, out var id) || !Guid.TryParse(rawStamp, out var stamp) ||
+                    !Guid.TryParse(context.Principal?.FindFirstValue("sid"), out var sessionId))
                 {
                     context.Fail("Invalid identity.");
                     return;
                 }
                 var db = context.HttpContext.RequestServices.GetRequiredService<OrchestraDbContext>();
                 var user = await db.AppUsers.AsNoTracking().FirstOrDefaultAsync(u => u.UserId == id);
-                if (user is null || user.Status != "ACTIVE" || user.DeletedAt != null ||
-                    user.EmailVerifiedAt is null || user.SecurityStamp != stamp ||
+                if (user is null || user.DeletedAt != null || user.SecurityStamp != stamp ||
                     !context.Principal!.IsInRole(user.RoleCode))
                 {
+                    context.Fail("Invalid identity.");
+                    return;
+                }
+                if (!await db.RefreshTokens.AsNoTracking().AnyAsync(t => t.UserId == id &&
+                    t.FamilyId == sessionId && t.RevokedAt == null && t.ExpiresAt > DateTime.UtcNow,
+                    context.HttpContext.RequestAborted))
+                {
+                    context.Fail("Session is no longer active.");
+                    return;
+                }
+                if (user.Status != "ACTIVE" || user.EmailVerifiedAt == null)
+                {
+                    context.HttpContext.Items["AccountUnavailable"] = true;
                     context.Fail("Account is unavailable.");
                     return;
                 }
@@ -77,6 +101,12 @@ builder.Services.AddCors(options => options.AddPolicy("frontend", policy =>
 builder.Services.AddRateLimiter(options =>
 {
     options.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
+    options.OnRejected = async (context, ct) =>
+    {
+        context.HttpContext.Response.Headers.RetryAfter = "60";
+        await context.HttpContext.Response.WriteAsJsonAsync(new ApiError("RATE_LIMITED",
+            "Too many requests. Try again later.", context.HttpContext.TraceIdentifier), ct);
+    };
     options.AddPolicy("auth", context => RateLimitPartition.GetFixedWindowLimiter(
         context.Connection.RemoteIpAddress?.ToString() ?? "unknown",
         _ => new FixedWindowRateLimiterOptions
@@ -103,7 +133,7 @@ builder.Services.Configure<ApiBehaviorOptions>(options =>
         return new ObjectResult(new ApiError(
             "VALIDATION_FAILED", "The request contains invalid fields.",
             context.HttpContext.TraceIdentifier, Errors: errors))
-        { StatusCode = 422 };
+        { StatusCode = context.HttpContext.Request.Path.Equals("/api/v1/auth/login", StringComparison.OrdinalIgnoreCase) ? 400 : 422 };
     };
 });
 
