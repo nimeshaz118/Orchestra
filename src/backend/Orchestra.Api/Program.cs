@@ -87,25 +87,26 @@ builder.Services.AddRateLimiter(options =>
 });
 
 builder.Services.Configure<ApiBehaviorOptions>(options =>
+{
     options.InvalidModelStateResponseFactory = context =>
     {
         var errors = context.ModelState
-            .Where(entry => entry.Value?.Errors.Count > 0)
+            .Where(field => field.Value?.Errors.Count > 0)
             .ToDictionary(
-                entry => entry.Key,
-                entry => entry.Value!.Errors
+                field => field.Key,
+                field => field.Value!.Errors
                     .Select(error => string.IsNullOrWhiteSpace(error.ErrorMessage)
                         ? "The supplied value is invalid."
                         : error.ErrorMessage)
                     .ToArray());
 
         return new ObjectResult(new ApiError(
-            "VALIDATION_FAILED",
-            "The request contains invalid fields.",
-            context.HttpContext.TraceIdentifier,
-            Errors: errors))
-        { StatusCode = StatusCodes.Status422UnprocessableEntity };
-    });
+            "VALIDATION_FAILED", "The request contains invalid fields.",
+            context.HttpContext.TraceIdentifier, Errors: errors))
+        { StatusCode = 422 };
+    };
+});
+
 
 builder.Services.AddHealthChecks()
     .AddDbContextCheck<OrchestraDbContext>(
