@@ -20,9 +20,12 @@ public sealed class AuthService(
 
     public async Task RegisterAsync(RegisterRequest request, CancellationToken ct)
     {
+        // Validate and normalize input
         var email = NormalizeEmail(request.Email);
+
         ValidatePassword(request.Password);
         var domain = email[(email.LastIndexOf('@') + 1)..];
+        //
         var allowAnyDomain = environment.IsDevelopment() &&
             configuration.GetValue<bool>("DevelopmentEmail:AllowAnyDomain") &&
             !string.IsNullOrWhiteSpace(configuration["DevelopmentEmail:Recipient"]);
