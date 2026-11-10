@@ -11,6 +11,7 @@ using Orchestra.Api.Data;
 using Orchestra.Api.Models.Entities;
 using Orchestra.Api.Modules.Auth;
 using Orchestra.Api.Modules.Departments;
+using Orchestra.Api.Modules.Domains;
 using Orchestra.Api.Modules.Users;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -30,6 +31,7 @@ builder.Services.AddScoped<IPasswordHasher<AppUser>, PasswordHasher<AppUser>>();
 builder.Services.AddScoped<AuthService>();
 builder.Services.AddScoped<MeService>();
 builder.Services.AddScoped<DepartmentsService>();
+builder.Services.AddScoped<DomainsService>();
 builder.Services.AddSingleton<CodeService>();
 builder.Services.AddSingleton<TokenService>();
 builder.Services.AddHttpClient<IEmailSender, ResendEmailSender>(client =>

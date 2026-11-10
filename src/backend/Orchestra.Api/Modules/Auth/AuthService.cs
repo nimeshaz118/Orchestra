@@ -65,7 +65,7 @@ public sealed class AuthService(
         var user = await FindByEmailAsync(request.Email, ct)
             ?? throw new ApiException(400, "INVALID_CODE", "The code is invalid or expired.");
         if (user.Status != "PENDING" || user.DeletedAt != null)
-            throw new ApiException(409, "INVALID_ACCOUNT_STATE", "This account cannot be verified.");
+            throw new ApiException(409, "INVALID_ACCOUNT_STATE", "This account/email cannot be verified or  it is already used.");
         var challenge = await ActiveChallengeAsync(user.UserId, VerifyPurpose, ct);
         if (challenge is null || !codes.Matches(user.UserId, VerifyPurpose, request.Code, challenge.CodeHash))
         {
