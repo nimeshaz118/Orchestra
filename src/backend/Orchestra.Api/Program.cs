@@ -95,13 +95,13 @@ builder.Services.Configure<ApiBehaviorOptions>(options =>
                 entry => entry.Key,
                 entry => entry.Value!.Errors
                     .Select(error => string.IsNullOrWhiteSpace(error.ErrorMessage)
-                        ? "The value is invalid."
+                        ? "The supplied value is invalid."
                         : error.ErrorMessage)
                     .ToArray());
 
         return new ObjectResult(new ApiError(
             "VALIDATION_FAILED",
-            "One or more fields are invalid.",
+            "The request contains invalid fields.",
             context.HttpContext.TraceIdentifier,
             Errors: errors))
         { StatusCode = StatusCodes.Status422UnprocessableEntity };

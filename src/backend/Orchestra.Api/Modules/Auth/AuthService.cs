@@ -160,12 +160,9 @@ public sealed class AuthService(
     public async Task ForgotPasswordAsync(EmailRequest request, CancellationToken ct)
     {
         var user = await FindByEmailAsync(request.Email, ct);
-        if (user is null || user.Status != "ACTIVE" || user.DeletedAt != null) return;
-        try { await IssueCodeAsync(user, ResetPurpose, ct); }
-        catch (ApiException ex) when (ex.Code is "CODE_RESEND_LIMIT" or "EMAIL_UNAVAILABLE")
-        {
-            // Recovery does not reveal whether an account exists or mail was sent.
-        }
+        if (user is null || user.Status != "ACTIVE" || user.DeletedAt != null)
+            throw new ApiException(404, "EMAIL_NOT_FOUND", "No account was found with this email address.");
+        await IssueCodeAsync(user, ResetPurpose, ct);
     }
 
     public async Task<string> VerifyResetCodeAsync(EmailCodeRequest request, CancellationToken ct)
