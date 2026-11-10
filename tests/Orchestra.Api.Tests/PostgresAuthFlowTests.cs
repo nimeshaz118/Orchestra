@@ -129,7 +129,7 @@ public sealed class PostgresAuthFlowTests
             });
             using var replay = new HttpRequestMessage(HttpMethod.Post, "/api/v1/auth/refresh");
             replay.Headers.TryAddWithoutValidation("Cookie", oldCookie);
-            Assert.Equal(HttpStatusCode.Unauthorized, (await replayClient.SendAsync(replay)).StatusCode);
+            Assert.Equal(HttpStatusCode.Conflict, (await replayClient.SendAsync(replay)).StatusCode);
             Assert.Equal(HttpStatusCode.Unauthorized,
                 (await client.PostAsync("/api/v1/auth/refresh", null)).StatusCode);
 
@@ -140,12 +140,33 @@ public sealed class PostgresAuthFlowTests
             using var logoutRequest = new HttpRequestMessage(HttpMethod.Post, "/api/v1/auth/logout");
             logoutRequest.Headers.TryAddWithoutValidation("Cookie", logoutCookie);
             var logout = await client.SendAsync(logoutRequest);
-            Assert.Equal(HttpStatusCode.NoContent, logout.StatusCode);
+            Assert.Equal(HttpStatusCode.OK, logout.StatusCode);
+            var logoutBody = await logout.Content.ReadFromJsonAsync<LogoutResponse>();
+            Assert.Equal("Logged out successfully.", logoutBody?.Message);
             Assert.Contains(logout.Headers.GetValues("Set-Cookie"),
                 value => value.StartsWith("orchestra_refresh=", StringComparison.OrdinalIgnoreCase));
             using var loggedOutRefresh = new HttpRequestMessage(HttpMethod.Post, "/api/v1/auth/refresh");
             loggedOutRefresh.Headers.TryAddWithoutValidation("Cookie", logoutCookie);
             Assert.Equal(HttpStatusCode.Unauthorized, (await replayClient.SendAsync(loggedOutRefresh)).StatusCode);
+
+            // Competing refresh requests must never leave two usable successors.
+            using var concurrencyHost = new PostgresHost(testBuilder.ConnectionString);
+            using var concurrencyClient = concurrencyHost.CreateClient(new WebApplicationFactoryClientOptions
+                { HandleCookies = false, BaseAddress = new Uri("https://localhost") });
+            var concurrentLogin = await concurrencyClient.PostAsJsonAsync("/api/v1/auth/login",
+                new { email = "integration@example.test", password = "long-passphrase-123" });
+            var concurrentCookie = concurrentLogin.Headers.GetValues("Set-Cookie").Single().Split(';')[0];
+            using var firstRotation = new HttpRequestMessage(HttpMethod.Post, "/api/v1/auth/refresh");
+            using var secondRotation = new HttpRequestMessage(HttpMethod.Post, "/api/v1/auth/refresh");
+            firstRotation.Headers.TryAddWithoutValidation("Cookie", concurrentCookie);
+            secondRotation.Headers.TryAddWithoutValidation("Cookie", concurrentCookie);
+            var rotations = await Task.WhenAll(concurrencyClient.SendAsync(firstRotation), concurrencyClient.SendAsync(secondRotation));
+            Assert.Single(rotations, r => r.StatusCode == HttpStatusCode.OK);
+            Assert.Single(rotations, r => r.StatusCode == HttpStatusCode.Conflict);
+            var winner = rotations.Single(r => r.StatusCode == HttpStatusCode.OK);
+            using var successor = new HttpRequestMessage(HttpMethod.Post, "/api/v1/auth/refresh");
+            successor.Headers.TryAddWithoutValidation("Cookie", winner.Headers.GetValues("Set-Cookie").Single().Split(';')[0]);
+            Assert.Equal(HttpStatusCode.Unauthorized, (await concurrencyClient.SendAsync(successor)).StatusCode);
 
             Assert.Equal(HttpStatusCode.OK, (await client.PostAsJsonAsync("/api/v1/auth/forgot-password",
                 new { email = "integration@example.test" })).StatusCode);

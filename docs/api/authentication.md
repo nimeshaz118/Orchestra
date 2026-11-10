@@ -47,7 +47,7 @@ Use HTTPS locally (`https://localhost:7235` in the launch profile). Refresh toke
 | `POST /auth/resend-verification` | Public | Replace prior code after resend cooldown |
 | `POST /auth/login` | Public | Password sign-in; access token and refresh cookie |
 | `POST /auth/refresh` | Refresh cookie | Rotate token and return a new access token |
-| `POST /auth/logout` | Refresh cookie | Revoke current refresh token and clear cookie |
+| `POST /auth/logout` | Bearer token or refresh cookie | Revoke access token, revoke session, clear cookie, return logout message |
 | `GET /auth/session` | Bearer token | Current user identity |
 | `POST /auth/forgot-password` | Public | Neutral response; send recovery code for eligible account |
 | `POST /auth/verify-reset-code` | Public | Exchange recovery code for short-lived reset token |
@@ -67,8 +67,8 @@ Use the `https://localhost:7235` API base URL from the HTTPS launch profile. Tru
 1. Call `POST /api/v1/auth/login` with JSON `{ "email": "...", "password": "..." }`. Save `accessToken` from the JSON response. Confirm the response's `Set-Cookie` contains `Secure`, `HttpOnly`, `SameSite=None`, and `Path=/api/v1`.
 2. Call `GET /api/v1/auth/session` with the bearer token. It should return the current user's profile.
 3. Call `POST /api/v1/auth/refresh` with no body. Postman sends its stored cookie; the response contains a new access token and rotates the cookie. Use the new access token on `/auth/session` to confirm it works.
-4. To demonstrate reuse detection, copy the cookie value before step 3. After step 3, send another refresh request with the copied old cookie (edit the cookie for this request in Postman's cookie manager). It should return `401` with `SESSION_REUSED`; the remaining refresh tokens in that token family are revoked. Sign in again before continuing.
-5. To demonstrate current-device logout, sign in again and call `POST /api/v1/auth/logout`. Postman sends the current cookie; expect `204` and an expired `orchestra_refresh` cookie. A refresh attempt with the saved pre-logout cookie should return `401`. Clear the saved bearer token in Postman to match the frontend's behavior of dropping its in-memory access token on logout.
+4. To demonstrate reuse detection, copy the cookie value before step 3. After step 3, send another refresh request with the copied old cookie (edit the cookie for this request in Postman's cookie manager). It should return `409` with `SESSION_REUSED`; the remaining refresh tokens in that token family are revoked. Sign in again before continuing.
+5. To demonstrate current-device logout, sign in again and call `POST /api/v1/auth/logout`. Postman sends the current cookie and/or bearer token; expect `200` with `{ "message": "Logged out successfully." }` and an expired `orchestra_refresh` cookie. A subsequent request to `/api/v1/me` or `/api/v1/auth/session` with the saved pre-logout bearer token returns `401 Unauthorized`, and a refresh attempt with the saved pre-logout cookie also returns `401`.
 
 For a disabled-account check, set the test account's database status to `INACTIVE` or `SUSPENDED` after login, then call refresh with its stored cookie. It should return `401` and clear the cookie. Restore the status to `ACTIVE` before signing in again. Refresh and logout accept requests without an `Origin` header for Postman; if you send an `Origin`, it must exactly match one of `Frontend:Origins`.
 
@@ -87,3 +87,18 @@ Remove-Item Env:ORCHESTRA_RUN_POSTGRES_TESTS
 ```
 
 The integration test still uses a fake email sender. Once a Resend key is configured, send a test code to the account mailbox to verify live delivery.
+
+## Login and session validation
+
+| Endpoint | Failure responses |
+| --- | --- |
+| POST /auth/login | 400 invalid email or missing/oversized password; 401 wrong credentials; 403 disabled/unverified account after password verification; 429 account lockout or IP rate limit |
+| POST /auth/refresh | 401 unknown/expired/revoked token or unavailable owner; 409 replay of a rotated token; 500 database or token issuance failure |
+| POST /auth/logout | 401 missing/invalid/expired credentials or mismatched bearer and cookie; 404 unknown refresh session; 500 revocation failure |
+| GET /auth/session | 401 invalid/expired JWT or inactive session; 403 unavailable account; 500 lookup failure |
+
+Errors retain the existing `code`, `message`, `requestId`, and `retryable` envelope. Unexpected failures use a safe `INTERNAL_ERROR` response and server-side logging. Login accepts existing passwords without imposing the registration complexity policy, but requires a nonempty password of at most 128 characters and a valid email of at most 320 characters. Five failed passwords lock the account for 15 minutes; the shared authentication IP limiter allows 20 requests per minute.
+
+Access JWTs now include `sid`, identifying the existing refresh-token family. JWT authentication verifies signature, issuer, audience, expiry, user security stamp, role, active session and account state. Existing access tokens without `sid` require a new login. Refresh rotation keeps this family identity, so rotation does not invalidate still-unexpired access tokens. Reuse revokes the family. Ordinary revoked tokens return 401 rather than being classified as reuse.
+
+Logout validates bearer tokens through JWT middleware, checks cookie ownership when both credentials are supplied, and revokes only the matching family. It does not change the global security stamp. Refresh and logout acquire the same PostgreSQL user-row lock inside transactions to prevent a concurrent rotation from surviving logout. Access-token generation occurs before committing rotation, so issuance failures roll back the database changes. No schema migration is required.

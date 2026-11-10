@@ -68,9 +68,21 @@ public sealed class AuthController(AuthService auth, IConfiguration configuratio
     public async Task<IActionResult> Logout(CancellationToken ct)
     {
         if (!HasTrustedOrigin()) return StatusCode(403, Error("UNTRUSTED_ORIGIN", "This request origin is not allowed."));
-        if (Request.Cookies.TryGetValue(CookieName, out var token)) await auth.LogoutAsync(token, ct);
+
+        Guid? userId = null;
+        Guid? sessionId = null;
+        if (Request.Headers.ContainsKey("Authorization"))
+        {
+            if (User.Identity?.IsAuthenticated != true)
+                throw new ApiException(401, "INVALID_SESSION", "Please sign in again.");
+            userId = Guid.Parse(User.FindFirstValue(JwtRegisteredClaimNames.Sub)!);
+            sessionId = Guid.Parse(User.FindFirstValue("sid")!);
+        }
+        Request.Cookies.TryGetValue(CookieName, out var refreshToken);
+        await auth.LogoutAsync(userId, sessionId, refreshToken, ct);
+
         ClearRefreshCookie();
-        return NoContent();
+        return Ok(new LogoutResponse("Logged out successfully."));
     }
 
     [Authorize, HttpGet("session")]
