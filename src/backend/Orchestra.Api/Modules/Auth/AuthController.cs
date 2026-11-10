@@ -85,7 +85,7 @@ public sealed class AuthController(AuthService auth, IConfiguration configuratio
     public async Task<IActionResult> ForgotPassword(EmailRequest request, CancellationToken ct)
     {
         await auth.ForgotPasswordAsync(request, ct);
-        return Ok(new { message = "If an eligible account exists, a recovery code will be sent." });
+        return Ok(new { message = "A recovery code will be sent." });
     }
 
     [HttpPost("verify-reset-code"), EnableRateLimiting("auth")]
@@ -97,7 +97,7 @@ public sealed class AuthController(AuthService auth, IConfiguration configuratio
     {
         await auth.ResetPasswordAsync(request, ct);
         ClearRefreshCookie();
-        return NoContent();
+        return Ok(new { message = "Password changed successfully." });
     }
 
     [Authorize, HttpPost("change-password"), EnableRateLimiting("auth")]
@@ -106,7 +106,7 @@ public sealed class AuthController(AuthService auth, IConfiguration configuratio
         var id = Guid.Parse(User.FindFirstValue(JwtRegisteredClaimNames.Sub)!);
         await auth.ChangePasswordAsync(id, request.CurrentPassword, request.NewPassword, ct);
         ClearRefreshCookie();
-        return NoContent();
+        return Ok(new { message = "Password changed successfully." });
     }
 
     private async Task<Models.Entities.AppUser> CurrentUserAsync(CancellationToken ct)
@@ -138,5 +138,3 @@ public sealed class AuthController(AuthService auth, IConfiguration configuratio
     private ApiError Error(string code, string message) => new(code, message, HttpContext.TraceIdentifier);
 }
 
-public sealed record ChangePasswordRequest([Required] string CurrentPassword,
-    [Required, MinLength(12)] string NewPassword);
