@@ -2,6 +2,7 @@ using System.IdentityModel.Tokens.Jwt;
 using System.Security.Claims;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.RateLimiting;
 using Orchestra.Api.Common;
 using Orchestra.Api.Modules.Auth;
 
@@ -30,6 +31,21 @@ public sealed class MeController(AuthService auth, MeService me) : ControllerBas
     {
         var id = Guid.Parse(User.FindFirstValue(JwtRegisteredClaimNames.Sub)!);
         return Ok(await auth.SessionsAsync(id, Request.Cookies["orchestra_refresh"], ct));
+    }
+
+    [HttpPost("password"), EnableRateLimiting("auth")]
+    public async Task<IActionResult> ChangePassword(ChangePasswordRequest request, CancellationToken ct)
+    {
+        var id = Guid.Parse(User.FindFirstValue(JwtRegisteredClaimNames.Sub)!);
+        await auth.ChangePasswordAsync(id, request.CurrentPassword, request.NewPassword, ct);
+        Response.Cookies.Delete("orchestra_refresh", new CookieOptions
+        {
+            HttpOnly = true,
+            Secure = true,
+            SameSite = SameSiteMode.None,
+            Path = "/api/v1"
+        });
+        return Ok(new { message = "Password changed successfully." });
     }
 
     private static MeDto ToUserDto(Models.Entities.AppUser? user)
