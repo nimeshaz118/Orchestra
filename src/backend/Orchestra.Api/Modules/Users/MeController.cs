@@ -3,6 +3,7 @@ using System.Security.Claims;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Orchestra.Api.Common;
+using Microsoft.AspNetCore.RateLimiting;
 using Orchestra.Api.Modules.Auth;
 
 namespace Orchestra.Api.Modules.Users;
@@ -29,6 +30,46 @@ public sealed class MeController(AuthService auth) : ControllerBase
             throw new ApiException(401, "INVALID_SESSION", "The session has expired.");
 
         return Ok(await auth.SessionsAsync(id, refreshToken, ct));
+    }
+    [HttpDelete("sessions/{sessionId:guid}"), EnableRateLimiting("sessionRevoke")]
+    public async Task<IActionResult> RevokeSession(
+        Guid sessionId,
+        CancellationToken ct)
+    {
+        var userId = User.GetUserId();
+
+        await auth.RevokeSessionAsync(
+            userId,
+            sessionId,
+            ct);
+
+        return Ok(new
+        {
+            message = "Session revoked successfully."
+        });
+    }
+
+    // Revoke all other sessions
+    [HttpDelete("sessions/others"), EnableRateLimiting("sessionRevoke")]
+    public async Task<IActionResult> RevokeOtherSessions(
+        CancellationToken ct)
+    {
+        var userId = User.GetUserId();
+
+        // Obtain the current refresh token from your existing
+        // refresh-token cookie/header mechanism.
+        var currentToken = Request.Cookies["orchestra_refresh"];
+
+        var count = await auth.RevokeOtherSessionsAsync(
+            userId,
+            currentToken,
+            ct);
+
+        return Ok(new
+        {
+            message = "Other sessions revoked successfully.",
+            revokedCount = count
+        });
     }
 
 }

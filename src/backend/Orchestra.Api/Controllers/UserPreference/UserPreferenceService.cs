@@ -4,7 +4,7 @@ using Orchestra.Api.Common;
 using Orchestra.Api.Data;
 using UserPreferenceEntity = Orchestra.Api.Models.Entities.UserPreference;
 
-namespace Orchestra.Api.Controller.UserPreference;
+namespace Orchestra.Api.Controllers.UserPreference;
 
 public sealed class UserPreferenceService(OrchestraDbContext db)
 {

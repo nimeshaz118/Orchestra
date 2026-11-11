@@ -4,7 +4,7 @@ using System.Text.Json;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 
-namespace Orchestra.Api.Controller.UserPreference;
+namespace Orchestra.Api.Controllers.UserPreference;
 
 [ApiController, Authorize]
 [Route("api/v1/me/preferences")]

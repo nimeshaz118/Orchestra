@@ -1,4 +1,5 @@
 using System.Security.Claims;
+using System.Data.Common;
 using System.Text.Json;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.EntityFrameworkCore;
@@ -18,6 +19,7 @@ public sealed class AuthService(
 {
     private const string VerifyPurpose = "EMAIL_VERIFICATION";
     private const string ResetPurpose = "PASSWORD_RESET";
+    private const string ForcedRevokeReason = "forced revoke";
 
     public async Task RegisterAsync(RegisterRequest request, CancellationToken ct)
     {
@@ -253,7 +255,7 @@ public sealed class AuthService(
             .FirstOrDefaultAsync(t => t.TokenHash == currentHash && t.UserId == userId, ct);
         if (currentSession is null || currentSession.RevokedAt is not null ||
             currentSession.ExpiresAt <= DateTime.UtcNow)
-            throw new ApiException(401, "INVALID_SESSION", "The session has expired.");
+            throw new ApiException(401, "INVALID_SESSION", "The session has expired.git");
 
         var sessions = await db.RefreshTokens.AsNoTracking()
             .Where(t => t.UserId == userId && t.RevokedAt == null && t.ExpiresAt > DateTime.UtcNow)
@@ -339,6 +341,74 @@ public sealed class AuthService(
         }, plain);
     }
 
+    public async Task RevokeSessionAsync(
+        Guid userId,
+        Guid sessionId,
+        CancellationToken ct)
+    {
+        RefreshToken? session;
+        try
+        {
+            session = await db.RefreshTokens
+                .FirstOrDefaultAsync(
+                    x => x.RefreshTokenId == sessionId && x.UserId == userId,
+                    ct);
+        }
+        catch (DbException)
+        {
+            throw new ApiException(500, "DATABASE_OPERATION_FAILED",
+                "The session could not be loaded.");
+        }
+
+        if (session is null)
+            throw new ApiException(404, "SESSION_NOT_FOUND", "The session was not found.");
+        if (session.RevokedAt is not null)
+            throw new ApiException(409, "SESSION_ALREADY_REVOKED", "The session has already been revoked.");
+
+        session.RevokedAt = DateTime.UtcNow;
+        session.RevokedReason = ForcedRevokeReason;
+        try
+        {
+            await db.SaveChangesAsync(ct);
+        }
+        catch (DbUpdateException)
+        {
+            throw new ApiException(500, "DATABASE_OPERATION_FAILED",
+                "The session could not be revoked.");
+        }
+    }
+    public async Task<int> RevokeOtherSessionsAsync(
+        Guid userId,
+        string? currentToken,
+        CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(currentToken))
+            throw new ApiException(401, "INVALID_SESSION", "The session has expired.");
+
+        var currentHash = TokenService.HashOpaqueToken(currentToken);
+
+        var sessions = await db.RefreshTokens
+            .Where(x =>
+                x.UserId == userId &&
+                x.RevokedAt == null &&
+                x.ExpiresAt > DateTime.UtcNow &&
+                x.TokenHash != currentHash)
+            .ToListAsync(ct);
+
+        if (sessions.Count == 0)
+            throw new ApiException(409, "ALL_OTHER_SESSIONS_REVOKED",
+                "All other sessions have already been revoked.");
+
+        foreach (var session in sessions)
+        {
+            session.RevokedAt = DateTime.UtcNow;
+            session.RevokedReason = ForcedRevokeReason;
+        }
+
+        await db.SaveChangesAsync(ct);
+
+        return sessions.Count;
+    }
     private static string NormalizeEmail(string email) => email.Trim().ToLowerInvariant();
     private static string CleanName(string value, int max)
     {

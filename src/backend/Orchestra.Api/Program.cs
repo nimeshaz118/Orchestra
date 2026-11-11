@@ -6,11 +6,12 @@ using Microsoft.AspNetCore.Identity;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using Orchestra.Api.Common;
-using Orchestra.Api.Controller.UserPreference;
+using Orchestra.Api.Controllers.UserPreference;
 using Orchestra.Api.Data;
 using Orchestra.Api.Models.Entities;
 using Orchestra.Api.Modules.Auth;
 using Orchestra.Api.Modules.Departments;
+using Orchestra.Api.Modules.Users;
 
 var builder = WebApplication.CreateBuilder(args);
 builder.Services.AddSingleton(provider =>
@@ -26,6 +27,7 @@ builder.Services.AddDbContext<OrchestraDbContext>(options =>
     options.UseNpgsql(builder.Configuration.GetConnectionString("OrchestraDb")));
 builder.Services.AddScoped<IPasswordHasher<AppUser>, PasswordHasher<AppUser>>();
 builder.Services.AddScoped<AuthService>();
+// builder.Services.AddScoped<Revoke>();
 builder.Services.AddScoped<DepartmentsService>();
 builder.Services.AddScoped<UserPreferenceService>();
 builder.Services.AddSingleton<CodeService>();
@@ -74,16 +76,35 @@ builder.Services.AddAuthorization();
 var origins = builder.Configuration.GetSection("Frontend:Origins").Get<string[]>() ?? [];
 builder.Services.AddCors(options => options.AddPolicy("frontend", policy =>
     policy.WithOrigins(origins).AllowAnyHeader().AllowAnyMethod().AllowCredentials()));
+
+
 builder.Services.AddRateLimiter(options =>
 {
     options.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
-    options.AddPolicy("auth", context => RateLimitPartition.GetFixedWindowLimiter(
-        context.Connection.RemoteIpAddress?.ToString() ?? "unknown",
-        _ => new FixedWindowRateLimiterOptions
-        {
-            PermitLimit = 20, Window = TimeSpan.FromMinutes(1), QueueLimit = 0,
-            AutoReplenishment = true
-        }));
+
+    // Authentication: 20 requests per minute per IP
+    options.AddPolicy("auth", context =>
+        RateLimitPartition.GetFixedWindowLimiter(
+            context.Connection.RemoteIpAddress?.ToString() ?? "unknown",
+            _ => new FixedWindowRateLimiterOptions
+            {
+                PermitLimit = 20,
+                Window = TimeSpan.FromMinutes(1),
+                QueueLimit = 0,
+                AutoReplenishment = true
+            }));
+
+    // Session revocation: 5 requests per minute per IP
+    options.AddPolicy("sessionRevoke", context =>
+        RateLimitPartition.GetFixedWindowLimiter(
+            context.Connection.RemoteIpAddress?.ToString() ?? "unknown",
+            _ => new FixedWindowRateLimiterOptions
+            {
+                PermitLimit = 2,
+                Window = TimeSpan.FromMinutes(1),
+                QueueLimit = 0,
+                AutoReplenishment = true
+            }));
 });
 
 builder.Services.Configure<ApiBehaviorOptions>(options =>
