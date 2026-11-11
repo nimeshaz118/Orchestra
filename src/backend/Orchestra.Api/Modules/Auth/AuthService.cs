@@ -96,9 +96,9 @@ public sealed class AuthService(
     {
         var user = await FindByEmailAsync(request.Email, ct);
         var now = DateTime.UtcNow;
-        if (user is null || user.DeletedAt != null || user.LockedUntil > now ||
-            user.Status != "ACTIVE" || user.EmailVerifiedAt == null)
-            throw InvalidLogin();
+        if (user is null || user.DeletedAt != null) throw InvalidLogin();
+        if (user.LockedUntil > now)
+            throw new ApiException(429, "LOGIN_THROTTLED", "Too many login attempts. Try again later.");
         if (passwords.VerifyHashedPassword(user, user.PasswordHash, request.Password) == PasswordVerificationResult.Failed)
         {
             user.FailedLoginAttempts++;
@@ -106,13 +106,18 @@ public sealed class AuthService(
             await db.SaveChangesAsync(ct);
             throw InvalidLogin();
         }
+        if (user.Status != "ACTIVE" && user.Status != "PENDING")
+            throw new ApiException(403, "ACCOUNT_DISABLED", "This account is disabled.");
+        if (user.EmailVerifiedAt == null || user.Status == "PENDING")
+            throw new ApiException(403, "EMAIL_NOT_VERIFIED", "Verify your email before signing in.");
         user.FailedLoginAttempts = 0;
         user.LockedUntil = null;
         user.LastLoginAt = now;
         var session = NewRefreshToken(user, Guid.NewGuid(), null, ip, userAgent);
         db.RefreshTokens.Add(session.Entity);
+        var response = tokens.AccessToken(user, session.Entity.FamilyId);
         await db.SaveChangesAsync(ct);
-        return new IssuedSession(tokens.AccessToken(user), session.Plain);
+        return new IssuedSession(response, session.Plain);
     }
 
     public async Task<IssuedSession> RefreshAsync(string plain, string? ip, string? userAgent, CancellationToken ct)
@@ -120,20 +125,27 @@ public sealed class AuthService(
         var hash = TokenService.HashOpaqueToken(plain);
         var old = await db.RefreshTokens.AsNoTracking().FirstOrDefaultAsync(t => t.TokenHash == hash, ct)
             ?? throw new ApiException(401, "INVALID_SESSION", "The session has expired.");
+        if (!await db.AppUsers.AnyAsync(u => u.UserId == old.UserId && u.Status == "ACTIVE" &&
+            u.EmailVerifiedAt != null && u.DeletedAt == null, ct))
+            throw new ApiException(401, "INVALID_SESSION", "Please sign in again.");
+        await using var transaction = await db.Database.BeginTransactionAsync(ct);
+        // Serialize rotation and logout for this account, including competing token generations.
+        await LockSessionOwnerAsync(old.UserId, ct);
+        old = await db.RefreshTokens.AsNoTracking().SingleAsync(t => t.RefreshTokenId == old.RefreshTokenId, ct);
         var now = DateTime.UtcNow;
-        if (old.RevokedAt != null)
+        if (old.RevokedAt != null && old.RevokedReason == "ROTATED")
         {
             await db.RefreshTokens.Where(t => t.UserId == old.UserId && t.FamilyId == old.FamilyId && t.RevokedAt == null)
                 .ExecuteUpdateAsync(s => s.SetProperty(t => t.RevokedAt, now)
                     .SetProperty(t => t.RevokedReason, "REUSE_DETECTED"), ct);
-            throw new ApiException(401, "SESSION_REUSED", "Please sign in again.");
+            await transaction.CommitAsync(ct);
+            throw new ApiException(409, "SESSION_REUSED", "Please sign in again.");
         }
-        if (old.ExpiresAt <= now) throw new ApiException(401, "INVALID_SESSION", "The session has expired.");
+        if (old.RevokedAt != null || old.ExpiresAt <= now) throw new ApiException(401, "INVALID_SESSION", "The session has expired.");
         var user = await db.AppUsers.FirstOrDefaultAsync(u => u.UserId == old.UserId, ct);
         if (user is null || user.Status != "ACTIVE" || user.EmailVerifiedAt == null || user.DeletedAt != null)
             throw new ApiException(401, "INVALID_SESSION", "Please sign in again.");
 
-        await using var transaction = await db.Database.BeginTransactionAsync(ct);
         var changed = await db.RefreshTokens.Where(t => t.RefreshTokenId == old.RefreshTokenId && t.RevokedAt == null)
             .ExecuteUpdateAsync(s => s.SetProperty(t => t.RevokedAt, now)
                 .SetProperty(t => t.RevokedReason, "ROTATED")
@@ -144,31 +156,67 @@ public sealed class AuthService(
             await db.RefreshTokens.Where(t => t.UserId == old.UserId && t.FamilyId == old.FamilyId && t.RevokedAt == null)
                 .ExecuteUpdateAsync(s => s.SetProperty(t => t.RevokedAt, now)
                     .SetProperty(t => t.RevokedReason, "REUSE_DETECTED"), ct);
-            throw new ApiException(401, "SESSION_REUSED", "Please sign in again.");
+            throw new ApiException(409, "SESSION_REUSED", "Please sign in again.");
         }
         var next = NewRefreshToken(user, old.FamilyId, old.RefreshTokenId, ip, userAgent);
         db.RefreshTokens.Add(next.Entity);
         await db.SaveChangesAsync(ct);
         await db.RefreshTokens.Where(t => t.RefreshTokenId == old.RefreshTokenId)
             .ExecuteUpdateAsync(s => s.SetProperty(t => t.ReplacedByTokenId, next.Entity.RefreshTokenId), ct);
+        var response = tokens.AccessToken(user, old.FamilyId);
         await transaction.CommitAsync(ct);
-        return new IssuedSession(tokens.AccessToken(user), next.Plain);
+        return new IssuedSession(response, next.Plain);
     }
 
-    public Task<int> LogoutAsync(string plain, CancellationToken ct) => db.RefreshTokens
-        .Where(t => t.TokenHash == TokenService.HashOpaqueToken(plain) && t.RevokedAt == null)
-        .ExecuteUpdateAsync(s => s.SetProperty(t => t.RevokedAt, DateTime.UtcNow)
-            .SetProperty(t => t.RevokedReason, "LOGOUT"), ct);
+    private Task LockSessionOwnerAsync(Guid userId, CancellationToken ct) =>
+        db.Database.ExecuteSqlInterpolatedAsync(
+            $"SELECT user_id FROM ai_orchestration.app_user WHERE user_id = {userId} FOR UPDATE", ct);
+
+    public async Task LogoutAsync(Guid? userId, Guid? sessionId, string? plainRefreshToken, CancellationToken ct)
+    {
+        if (userId == null && string.IsNullOrWhiteSpace(plainRefreshToken))
+            throw new ApiException(401, "INVALID_SESSION", "Please sign in again.");
+        RefreshToken? supplied = null;
+        if (!string.IsNullOrWhiteSpace(plainRefreshToken))
+        {
+            var hash = TokenService.HashOpaqueToken(plainRefreshToken);
+            supplied = await db.RefreshTokens.AsNoTracking().SingleOrDefaultAsync(t => t.TokenHash == hash, ct)
+                ?? throw new ApiException(404, "SESSION_NOT_FOUND", "The session was not found.");
+            if ((userId != null && (supplied.UserId != userId || supplied.FamilyId != sessionId)))
+                throw new ApiException(401, "INVALID_SESSION", "The credentials do not identify the same session.");
+            userId = supplied.UserId;
+            sessionId = supplied.FamilyId;
+        }
+        await using var transaction = db.Database.IsRelational()
+            ? await db.Database.BeginTransactionAsync(ct) : null;
+        if (transaction != null) await LockSessionOwnerAsync(userId!.Value, ct);
+        if (supplied != null)
+        {
+            supplied = await db.RefreshTokens.AsNoTracking().SingleAsync(t => t.RefreshTokenId == supplied.RefreshTokenId, ct);
+            if (supplied.RevokedAt != null || supplied.ExpiresAt <= DateTime.UtcNow)
+                throw new ApiException(401, "INVALID_SESSION", "Please sign in again.");
+        }
+        var family = await db.RefreshTokens.Where(t => t.UserId == userId && t.FamilyId == sessionId).ToListAsync(ct);
+        if (family.Count == 0)
+            throw new ApiException(404, "SESSION_NOT_FOUND", "The session was not found.");
+        var now = DateTime.UtcNow;
+        if (!family.Any(t => t.RevokedAt == null && t.ExpiresAt > now))
+            throw new ApiException(401, "INVALID_SESSION", "Please sign in again.");
+        foreach (var token in family.Where(t => t.RevokedAt == null))
+        {
+            token.RevokedAt = now;
+            token.RevokedReason = "LOGOUT";
+        }
+        await db.SaveChangesAsync(ct);
+        if (transaction != null) await transaction.CommitAsync(ct);
+    }
 
     public async Task ForgotPasswordAsync(EmailRequest request, CancellationToken ct)
     {
         var user = await FindByEmailAsync(request.Email, ct);
-        if (user is null || user.Status != "ACTIVE" || user.DeletedAt != null) return;
-        try { await IssueCodeAsync(user, ResetPurpose, ct); }
-        catch (ApiException ex) when (ex.Code is "CODE_RESEND_LIMIT" or "EMAIL_UNAVAILABLE")
-        {
-            // Recovery does not reveal whether an account exists or mail was sent.
-        }
+        if (user is null || user.Status != "ACTIVE" || user.DeletedAt != null)
+            throw new ApiException(404, "EMAIL_NOT_FOUND", "No account was found with this email address.");
+        await IssueCodeAsync(user, ResetPurpose, ct);
     }
 
     public async Task<string> VerifyResetCodeAsync(EmailCodeRequest request, CancellationToken ct)

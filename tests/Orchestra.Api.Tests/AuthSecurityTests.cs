@@ -41,7 +41,7 @@ public sealed class AuthSecurityTests
         var challenge = Guid.NewGuid();
         var reset = tokens.ResetToken(user, challenge);
         Assert.Equal(challenge, tokens.ValidateResetToken(reset)?.ChallengeId);
-        Assert.Null(tokens.ValidateResetToken(tokens.AccessToken(user).AccessToken));
+        Assert.Null(tokens.ValidateResetToken(tokens.AccessToken(user, Guid.NewGuid()).AccessToken));
     }
 
     [Theory]
