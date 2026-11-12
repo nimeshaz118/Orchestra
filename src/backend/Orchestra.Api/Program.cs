@@ -64,11 +64,15 @@ builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
             {
                 context.HandleResponse();
                 var disabled = context.HttpContext.Items.ContainsKey("AccountUnavailable");
+                var hasBearerToken = context.Request.Headers.Authorization
+                    .ToString()
+                    .StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase);
                 context.Response.StatusCode = disabled ? 403 : 401;
                 if (!disabled) context.Response.Headers.WWWAuthenticate = "Bearer";
                 await context.Response.WriteAsJsonAsync(new ApiError(
-                    disabled ? "ACCOUNT_DISABLED" : "INVALID_SESSION",
-                    disabled ? "This account is unavailable." : "Please sign in again.",
+                    disabled ? "ACCOUNT_DISABLED" : hasBearerToken ? "INVALID_SESSION" : "UNAUTHENTICATED",
+                    disabled ? "This account is unavailable." :
+                        hasBearerToken ? "Please sign in again." : "Sign in to access this resource.",
                     context.HttpContext.TraceIdentifier));
             },
             OnTokenValidated = async context =>
