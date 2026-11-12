@@ -98,6 +98,7 @@ CREATE TABLE app_user (
     display_name VARCHAR(150) NULL,
     phone_number VARCHAR(30) NULL,
     job_title VARCHAR(120) NULL,
+    avatar_data bytea NULL,
     status VARCHAR(20) NOT NULL DEFAULT 'PENDING',
     email_verified_at TIMESTAMPTZ NULL,
     must_change_password BOOLEAN NOT NULL DEFAULT FALSE,
