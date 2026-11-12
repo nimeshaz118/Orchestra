@@ -19,13 +19,14 @@ public sealed record CreateDomainRequest(string? DomainName);
 
 public sealed record CreateDomainResult(DomainDto Domain, bool Created);
 
-public sealed class DomainsService(OrchestraDbContext db)
+public sealed partial class DomainsService(OrchestraDbContext db)
 {
-    private static readonly Regex DomainPattern = new(
+    // Regex implementation generated at compile time
+    [GeneratedRegex(
         @"^(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$",
-        RegexOptions.IgnoreCase |
-        RegexOptions.CultureInvariant |
-        RegexOptions.Compiled);
+        RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
+    private static partial Regex DomainPattern();
+
 
     public Task<List<DomainDto>> ListAsync(CancellationToken ct) =>
         db.ApprovedEmailDomains
@@ -52,14 +53,17 @@ public sealed class DomainsService(OrchestraDbContext db)
                 "DOMAIN_REQUIRED",
                 "Enter an email domain, such as university.edu.");
 
-        if (!DomainPattern.IsMatch(name))
+        if (!DomainPattern().IsMatch(name))
             throw new ApiException(
                 422,
                 "INVALID_DOMAIN",
                 "Enter a valid domain such as university.edu. Do not include @, https://, spaces, or a wildcard.");
 
+        // Preserve PostgreSQL-compatible case-insensitive comparison.
+        #pragma warning disable CA1862
         var existing = await db.ApprovedEmailDomains
             .FirstOrDefaultAsync(d => d.DomainName.ToLower() == name, ct);
+        #pragma warning restore CA1862
 
         if (existing is not null)
         {

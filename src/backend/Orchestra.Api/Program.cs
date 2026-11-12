@@ -164,11 +164,10 @@ builder.Services.Configure<ApiBehaviorOptions>(options =>
     };
 });
 
-
 builder.Services.AddHealthChecks()
     .AddDbContextCheck<OrchestraDbContext>(
         name: "postgresql",
-        tags: new[] { "ready" });
+        tags: HealthCheckTags.Ready);
 
 var app = builder.Build();
 app.UseExceptionHandler(handler => handler.Run(async context =>
@@ -261,4 +260,8 @@ app.MapHealthChecks("/health/ready", new HealthCheckOptions
 
 app.Run();
 
-public partial class Program;
+internal static class HealthCheckTags
+{
+    internal static readonly string[] Ready = ["ready"];
+}
+

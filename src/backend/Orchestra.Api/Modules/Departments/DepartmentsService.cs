@@ -57,6 +57,10 @@ public sealed class DepartmentsService(OrchestraDbContext db)
     public Task<DepartmentDto> DeactivateAsync(Guid departmentId, Guid actor, CancellationToken ct)
         => SetStatusAsync(departmentId, "INACTIVE", actor, ct);
 
+    //To fix sonarqube errors.
+    private static readonly string[] NonEditableFieldError =
+    ["This field cannot be changed."];
+
     private async Task<DepartmentDto> SetStatusAsync(
         Guid departmentId, string status, Guid actor, CancellationToken ct)
     {
@@ -86,7 +90,7 @@ public sealed class DepartmentsService(OrchestraDbContext db)
         {
             var errors = additionalProperties.Keys.ToDictionary(
                 field => field,
-                _ => new[] { "This field cannot be changed." });
+                _ => NonEditableFieldError);
             throw InvalidField(
                 "INVALID_DEPARTMENT_UPDATE",
                 "One or more department fields are not editable.",
@@ -125,11 +129,17 @@ public sealed class DepartmentsService(OrchestraDbContext db)
         }
 
         if (name is not null)
-        {
+        { 
             var normalized = name.ToLowerInvariant();
+
+            // EF Core translates ToLower() into SQL LOWER().
+            // StringComparison.OrdinalIgnoreCase is not translated.
+            #pragma warning disable CA1862
             if (await db.Departments.AnyAsync(
-                    d => d.DepartmentId != departmentId && d.DepartmentName.ToLower() == normalized, ct))
+                    d => d.DepartmentId != departmentId &&
+                        d.DepartmentName.ToLower() == normalized, ct))
                 throw DuplicateName();
+            #pragma warning restore CA1862
 
             department.DepartmentName = name;
         }
@@ -185,8 +195,13 @@ public sealed class DepartmentsService(OrchestraDbContext db)
                 validationErrors);
 
         var normalized = name.ToLowerInvariant();
+
+        // Keep the SQL-compatible comparison for EF Core.
+        #pragma warning disable CA1862
         if (await db.Departments.AnyAsync(d => d.DepartmentName.ToLower() == normalized, ct))
             throw DuplicateName();
+        #pragma warning restore CA1862
+        
         var now = DateTime.UtcNow;
         var department = new Department
         {

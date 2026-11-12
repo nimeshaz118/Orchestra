@@ -32,14 +32,21 @@ public sealed class AuthService(
         var allowAnyDomain = environment.IsDevelopment() &&
             configuration.GetValue<bool>("DevelopmentEmail:AllowAnyDomain") &&
             !string.IsNullOrWhiteSpace(configuration["DevelopmentEmail:Recipient"]);
+        
+        #pragma warning disable CA1862 // Keep SQL-translatable comparison for EF Core.
+
         if (!allowAnyDomain && !await db.ApprovedEmailDomains.AnyAsync(
                 d => d.IsActive && d.DomainName.ToLower() == domain, ct))
             throw new ApiException(422, "EMAIL_DOMAIN_NOT_APPROVED", "Use an approved company email address.");
         if (request.DepartmentId == Guid.Empty || !await db.Departments.AnyAsync(
                 d => d.DepartmentId == request.DepartmentId && d.Status == "ACTIVE", ct))
             throw new ApiException(422, "DEPARTMENT_NOT_AVAILABLE", "Select an active department.");
+        #pragma warning restore CA1862
+
+        #pragma warning disable CA1862 // EF Core database query requires SQL-compatible comparison.
         if (await db.AppUsers.AnyAsync(u => u.Email.ToLower() == email, ct))
             throw new ApiException(409, "EMAIL_ALREADY_REGISTERED", "An account with this email already exists.");
+        #pragma warning restore CA1862
 
         var now = DateTime.UtcNow;
         var user = new AppUser
@@ -180,7 +187,7 @@ public sealed class AuthService(
         return new IssuedSession(response, next.Plain);
     }
 
-    private Task LockSessionOwnerAsync(Guid userId, CancellationToken ct) =>
+    private Task<int> LockSessionOwnerAsync(Guid userId, CancellationToken ct) =>
         db.Database.ExecuteSqlInterpolatedAsync(
             $"SELECT user_id FROM ai_orchestration.app_user WHERE user_id = {userId} FOR UPDATE", ct);
 
@@ -400,7 +407,10 @@ public sealed class AuthService(
     private Task<AppUser?> FindByEmailAsync(string email, CancellationToken ct)
     {
         var normalized = NormalizeEmail(email);
+
+        #pragma warning disable CA1862 // EF Core requires SQL-translatable comparison.
         return db.AppUsers.FirstOrDefaultAsync(u => u.Email.ToLower() == normalized, ct);
+        #pragma warning restore CA1862
     }
 
     private (RefreshToken Entity, string Plain) NewRefreshToken(AppUser user, Guid familyId,
