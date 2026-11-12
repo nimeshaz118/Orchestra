@@ -39,7 +39,7 @@ public sealed class MeController(AuthService auth, MeService me, AvatarService a
     }
 
 
-    [HttpDelete("sessions/{sessionId:guid}"), EnableRateLimiting("sessionRevoke")]
+    [HttpDelete("sessions/{sessionId:guid}")]
     public async Task<IActionResult> RevokeSession(
         Guid sessionId,
         CancellationToken ct)
