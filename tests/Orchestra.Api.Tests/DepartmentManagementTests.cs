@@ -11,6 +11,92 @@ namespace Orchestra.Api.Tests;
 public sealed class DepartmentManagementTests
 {
     [Fact]
+    public async Task Department_creation_validates_fields_saves_and_rejects_case_insensitive_duplicates()
+    {
+        await using var host = new ApiHost();
+        var client = await SuperAdminClientAsync(host);
+
+        var created = await client.PostAsJsonAsync("/api/v1/super-admin/departments",
+            new { name = "Finance", description = "Finance team" });
+        Assert.Equal(HttpStatusCode.Created, created.StatusCode);
+        var response = await created.Content.ReadFromJsonAsync<DepartmentResponse>();
+        Assert.NotNull(response);
+        Assert.Equal("Finance", response.Name);
+        Assert.Equal("ACTIVE", response.Status);
+
+        using (var scope = host.Services.CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<OrchestraDbContext>();
+            var department = await db.Departments.SingleAsync(d => d.DepartmentId == response.Id);
+            var actor = await db.AppUsers.SingleAsync(u => u.Email == "super@example.test");
+            Assert.Equal(actor.UserId, department.CreatedByUserId);
+            Assert.Equal("Finance team", department.Description);
+        }
+
+        var blankName = await client.PostAsJsonAsync("/api/v1/super-admin/departments",
+            new { name = " ", description = (string?)null });
+        Assert.Equal((HttpStatusCode)422, blankName.StatusCode);
+        var blankNameError = await blankName.Content.ReadFromJsonAsync<ApiError>();
+        Assert.Equal("INVALID_DEPARTMENT", blankNameError?.Code);
+        Assert.Contains("name", blankNameError!.Errors!.Keys);
+
+        var longName = await client.PostAsJsonAsync("/api/v1/super-admin/departments",
+            new { name = new string('n', 151), description = (string?)null });
+        Assert.Equal((HttpStatusCode)422, longName.StatusCode);
+        Assert.Contains("name",
+            (await longName.Content.ReadFromJsonAsync<ApiError>())!.Errors!.Keys);
+
+        var longDescription = await client.PostAsJsonAsync("/api/v1/super-admin/departments",
+            new { name = "Operations", description = new string('x', 2001) });
+        Assert.Equal((HttpStatusCode)422, longDescription.StatusCode);
+        Assert.Contains("description",
+            (await longDescription.Content.ReadFromJsonAsync<ApiError>())!.Errors!.Keys);
+
+        var duplicate = await client.PostAsJsonAsync("/api/v1/super-admin/departments",
+            new { name = "finance", description = "Duplicate department" });
+        Assert.Equal(HttpStatusCode.Conflict, duplicate.StatusCode);
+        Assert.Equal("DEPARTMENT_EXISTS",
+            (await duplicate.Content.ReadFromJsonAsync<ApiError>())?.Code);
+    }
+
+    [Fact]
+    public async Task Admin_department_list_includes_inactive_departments()
+    {
+        await using var host = new ApiHost();
+        var activeId = await host.SeedDepartmentAsync("Engineering", "ACTIVE");
+        var inactiveId = await host.SeedDepartmentAsync("Finance", "INACTIVE");
+        await host.SeedUserAsync("admin@example.test", "ADMIN");
+        var client = await host.LoginClientAsync("admin@example.test");
+
+        var response = await client.GetAsync("/api/v1/admin/departments");
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var departments = await response.Content.ReadFromJsonAsync<List<DepartmentResponse>>();
+        Assert.Contains(departments!, department => department.Id == activeId);
+        Assert.Contains(departments!, department => department.Id == inactiveId);
+    }
+
+    [Fact]
+    public async Task Admin_can_create_a_department()
+    {
+        await using var host = new ApiHost();
+        await host.SeedUserAsync("admin@example.test", "ADMIN");
+        var client = await host.LoginClientAsync("admin@example.test");
+
+        var response = await client.PostAsJsonAsync("/api/v1/admin/departments",
+            new { name = "Operations", description = "Operations team" });
+
+        Assert.Equal(HttpStatusCode.Created, response.StatusCode);
+        var departmentResponse = await response.Content.ReadFromJsonAsync<DepartmentResponse>();
+        Assert.Equal("Operations", departmentResponse?.Name);
+        Assert.Equal("ACTIVE", departmentResponse?.Status);
+        using var scope = host.Services.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<OrchestraDbContext>();
+        Assert.Equal("Operations",
+            (await db.Departments.SingleAsync(d => d.DepartmentId == departmentResponse!.Id)).DepartmentName);
+    }
+
+    [Fact]
     public async Task Super_admin_can_get_and_partially_update_a_department()
     {
         await using var host = new ApiHost();
@@ -21,6 +107,13 @@ public sealed class DepartmentManagementTests
         Assert.Equal(HttpStatusCode.OK, get.StatusCode);
         var before = await get.Content.ReadFromJsonAsync<DepartmentResponse>();
         Assert.Equal("Engineering", before?.Name);
+
+        DateTime createdAt;
+        using (var scope = host.Services.CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<OrchestraDbContext>();
+            createdAt = (await db.Departments.SingleAsync(d => d.DepartmentId == id)).CreatedAt;
+        }
 
         var patch = await client.PatchAsJsonAsync(
             $"/api/v1/super-admin/departments/{id}",
@@ -37,6 +130,15 @@ public sealed class DepartmentManagementTests
         after = await patch.Content.ReadFromJsonAsync<DepartmentResponse>();
         Assert.Equal("Platform", after?.Name);
         Assert.Null(after?.Description);
+
+        using (var scope = host.Services.CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<OrchestraDbContext>();
+            var department = await db.Departments.SingleAsync(d => d.DepartmentId == id);
+            var actor = await db.AppUsers.SingleAsync(u => u.Email == "super@example.test");
+            Assert.Equal(actor.UserId, department.UpdatedByUserId);
+            Assert.True(department.UpdatedAt >= createdAt);
+        }
     }
 
     [Fact]
@@ -102,7 +204,7 @@ public sealed class DepartmentManagementTests
         var deniedError = await denied.Content.ReadFromJsonAsync<ApiError>();
         Assert.Contains("status", deniedError!.Errors!.Keys);
 
-        var duplicate = await client.PatchAsJsonAsync(path, new { name = "Finance" });
+        var duplicate = await client.PatchAsJsonAsync(path, new { name = "finance" });
         Assert.Equal(HttpStatusCode.Conflict, duplicate.StatusCode);
         var duplicateError = await duplicate.Content.ReadFromJsonAsync<ApiError>();
         Assert.Equal("DEPARTMENT_EXISTS", duplicateError?.Code);
@@ -110,8 +212,8 @@ public sealed class DepartmentManagementTests
 
         using var scope = host.Services.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<OrchestraDbContext>();
-        Assert.Equal("Engineering",
-            (await db.Departments.SingleAsync(d => d.DepartmentId == id)).DepartmentName);
+        var department = await db.Departments.SingleAsync(d => d.DepartmentId == id);
+        Assert.Equal("Engineering", department.DepartmentName);
     }
 
     [Fact]
@@ -131,10 +233,13 @@ public sealed class DepartmentManagementTests
         Assert.Equal(HttpStatusCode.Forbidden, patch.StatusCode);
         Assert.Equal("FORBIDDEN", (await patch.Content.ReadFromJsonAsync<ApiError>())?.Code);
 
-        Assert.Equal(HttpStatusCode.Forbidden,
-            (await client.PostAsync($"{path}/activate", null)).StatusCode);
-        Assert.Equal(HttpStatusCode.Forbidden,
-            (await client.PostAsync($"{path}/deactivate", null)).StatusCode);
+        var activate = await client.PostAsync($"{path}/activate", null);
+        Assert.Equal(HttpStatusCode.Forbidden, activate.StatusCode);
+        Assert.Equal("FORBIDDEN", (await activate.Content.ReadFromJsonAsync<ApiError>())?.Code);
+
+        var deactivate = await client.PostAsync($"{path}/deactivate", null);
+        Assert.Equal(HttpStatusCode.Forbidden, deactivate.StatusCode);
+        Assert.Equal("FORBIDDEN", (await deactivate.Content.ReadFromJsonAsync<ApiError>())?.Code);
     }
 
     [Fact]
@@ -147,17 +252,20 @@ public sealed class DepartmentManagementTests
 
         Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
         var error = await response.Content.ReadFromJsonAsync<ApiError>();
-        Assert.Equal("UNAUTHENTICATED", error?.Code);
+        Assert.Equal("INVALID_SESSION", error?.Code);
         Assert.False(string.IsNullOrWhiteSpace(error?.Message));
         Assert.False(string.IsNullOrWhiteSpace(error?.RequestId));
         Assert.False(error?.Retryable);
 
-        Assert.Equal(HttpStatusCode.Unauthorized,
-            (await client.PostAsync(
-                $"/api/v1/super-admin/departments/{Guid.NewGuid()}/activate", null)).StatusCode);
-        Assert.Equal(HttpStatusCode.Unauthorized,
-            (await client.PostAsync(
-                $"/api/v1/super-admin/departments/{Guid.NewGuid()}/deactivate", null)).StatusCode);
+        var activate = await client.PostAsync(
+            $"/api/v1/super-admin/departments/{Guid.NewGuid()}/activate", null);
+        Assert.Equal(HttpStatusCode.Unauthorized, activate.StatusCode);
+        Assert.Equal("INVALID_SESSION", (await activate.Content.ReadFromJsonAsync<ApiError>())?.Code);
+
+        var deactivate = await client.PostAsync(
+            $"/api/v1/super-admin/departments/{Guid.NewGuid()}/deactivate", null);
+        Assert.Equal(HttpStatusCode.Unauthorized, deactivate.StatusCode);
+        Assert.Equal("INVALID_SESSION", (await deactivate.Content.ReadFromJsonAsync<ApiError>())?.Code);
     }
 
     [Fact]
@@ -172,11 +280,26 @@ public sealed class DepartmentManagementTests
         Assert.Equal(HttpStatusCode.OK, deactivate.StatusCode);
         Assert.Equal("INACTIVE",
             (await deactivate.Content.ReadFromJsonAsync<DepartmentResponse>())?.Status);
+        DateTime inactiveUpdatedAt;
+        using (var scope = host.Services.CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<OrchestraDbContext>();
+            var department = await db.Departments.SingleAsync(d => d.DepartmentId == id);
+            var actor = await db.AppUsers.SingleAsync(u => u.Email == "super@example.test");
+            Assert.Equal(actor.UserId, department.UpdatedByUserId);
+            inactiveUpdatedAt = department.UpdatedAt;
+        }
 
         var repeatDeactivate = await client.PostAsync($"{basePath}/deactivate", null);
         Assert.Equal(HttpStatusCode.OK, repeatDeactivate.StatusCode);
         Assert.Equal("INACTIVE",
             (await repeatDeactivate.Content.ReadFromJsonAsync<DepartmentResponse>())?.Status);
+        using (var scope = host.Services.CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<OrchestraDbContext>();
+            var department = await db.Departments.SingleAsync(d => d.DepartmentId == id);
+            Assert.Equal(inactiveUpdatedAt, department.UpdatedAt);
+        }
 
         var publicDepartments = await host.CreateClient()
             .GetFromJsonAsync<List<DepartmentResponse>>("/api/v1/public/departments");
@@ -200,6 +323,13 @@ public sealed class DepartmentManagementTests
         Assert.Equal(HttpStatusCode.OK, activate.StatusCode);
         Assert.Equal("ACTIVE",
             (await activate.Content.ReadFromJsonAsync<DepartmentResponse>())?.Status);
+        using (var scope = host.Services.CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<OrchestraDbContext>();
+            var department = await db.Departments.SingleAsync(d => d.DepartmentId == id);
+            var actor = await db.AppUsers.SingleAsync(u => u.Email == "super@example.test");
+            Assert.Equal(actor.UserId, department.UpdatedByUserId);
+        }
 
         var repeatActivate = await client.PostAsync($"{basePath}/activate", null);
         Assert.Equal(HttpStatusCode.OK, repeatActivate.StatusCode);
