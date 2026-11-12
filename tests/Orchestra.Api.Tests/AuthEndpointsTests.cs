@@ -386,6 +386,7 @@ public sealed class ApiHost : WebApplicationFactory<Program>
             services.RemoveAll<DbContextOptions<OrchestraDbContext>>();
             services.RemoveAll<IDbContextOptionsConfiguration<OrchestraDbContext>>();
             services.AddDbContext<OrchestraDbContext>(o => o.UseInMemoryDatabase(_dbName)
+                .ConfigureWarnings(warnings => warnings.Ignore(InMemoryEventId.TransactionIgnoredWarning))
                 .AddInterceptors(new SessionSaveFailure(this)));
             services.RemoveAll<IEmailSender>();
             services.AddSingleton<IEmailSender>(Email);
