@@ -12,6 +12,9 @@ using Orchestra.Api.Models.Entities;
 using Orchestra.Api.Modules.Auth;
 using Orchestra.Api.Modules.Departments;
 using Orchestra.Api.Modules.Users;
+using Orchestra.Api.Modules.Users.Service;
+using Orchestra.Api.Modules.Users.UseCases;
+using Orchestra.Api.Modules.Users.Interfaces;
 
 var builder = WebApplication.CreateBuilder(args);
 builder.Services.AddSingleton(provider =>
@@ -32,6 +35,10 @@ builder.Services.AddScoped<DepartmentsService>();
 builder.Services.AddScoped<UserPreferenceService>();
 builder.Services.AddSingleton<CodeService>();
 builder.Services.AddSingleton<TokenService>();
+builder.Services.AddScoped<RevokeSessionUseCase>();
+builder.Services.AddScoped<RevokeOtherSessionsUseCase>();
+
+builder.Services.AddScoped<ISessionService, SessionService>();
 builder.Services.AddHttpClient<IEmailSender, ResendEmailSender>(client =>
 {
     client.BaseAddress = new Uri("https://api.resend.com/");
@@ -115,7 +122,7 @@ builder.Services.AddRateLimiter(options =>
             context.Connection.RemoteIpAddress?.ToString() ?? "unknown",
             _ => new FixedWindowRateLimiterOptions
             {
-                PermitLimit = 2,
+                PermitLimit = 25,
                 Window = TimeSpan.FromMinutes(1),
                 QueueLimit = 0,
                 AutoReplenishment = true

@@ -255,7 +255,7 @@ public sealed class AuthService(
             .FirstOrDefaultAsync(t => t.TokenHash == currentHash && t.UserId == userId, ct);
         if (currentSession is null || currentSession.RevokedAt is not null ||
             currentSession.ExpiresAt <= DateTime.UtcNow)
-            throw new ApiException(401, "INVALID_SESSION", "The session has expired.git");
+            throw new ApiException(401, "INVALID_SESSION", "The session has expired.");
 
         var sessions = await db.RefreshTokens.AsNoTracking()
             .Where(t => t.UserId == userId && t.RevokedAt == null && t.ExpiresAt > DateTime.UtcNow)

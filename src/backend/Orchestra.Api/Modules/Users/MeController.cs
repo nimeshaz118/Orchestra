@@ -2,15 +2,16 @@ using System.IdentityModel.Tokens.Jwt;
 using System.Security.Claims;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
-using Orchestra.Api.Common;
 using Microsoft.AspNetCore.RateLimiting;
+using Orchestra.Api.Common;
 using Orchestra.Api.Modules.Auth;
+using Orchestra.Api.Modules.Users.Interfaces;
 
 namespace Orchestra.Api.Modules.Users;
 
 [ApiController, Authorize]
 [Route("api/v1/me")]
-public sealed class MeController(AuthService auth) : ControllerBase
+public sealed class MeController(AuthService auth, ISessionService session) : ControllerBase
 {
     [HttpGet]
     public async Task<IActionResult> Get(CancellationToken ct)
@@ -31,6 +32,8 @@ public sealed class MeController(AuthService auth) : ControllerBase
 
         return Ok(await auth.SessionsAsync(id, refreshToken, ct));
     }
+
+
     [HttpDelete("sessions/{sessionId:guid}"), EnableRateLimiting("sessionRevoke")]
     public async Task<IActionResult> RevokeSession(
         Guid sessionId,
@@ -38,7 +41,7 @@ public sealed class MeController(AuthService auth) : ControllerBase
     {
         var userId = User.GetUserId();
 
-        await auth.RevokeSessionAsync(
+        await session.RevokeSessionAsync(
             userId,
             sessionId,
             ct);
@@ -60,7 +63,7 @@ public sealed class MeController(AuthService auth) : ControllerBase
         // refresh-token cookie/header mechanism.
         var currentToken = Request.Cookies["orchestra_refresh"];
 
-        var count = await auth.RevokeOtherSessionsAsync(
+        var count = await session.RevokeOtherSessionsAsync(
             userId,
             currentToken,
             ct);
