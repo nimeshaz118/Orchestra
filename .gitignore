@@ -22,6 +22,7 @@ npm-debug.log*
 # .NET output
 bin/
 obj/
+App_Data/
 
 # Local database and container data
 *.sqlite
@@ -36,3 +37,7 @@ infrastructure/.volumes/
 *.sln.docstates
 Thumbs.db
 Desktop.ini
+
+
+#sonarqube for testing
+.sonarqube/

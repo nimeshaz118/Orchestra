@@ -30,6 +30,7 @@ builder.Services.AddDbContext<OrchestraDbContext>(options =>
 builder.Services.AddScoped<IPasswordHasher<AppUser>, PasswordHasher<AppUser>>();
 builder.Services.AddScoped<AuthService>();
 builder.Services.AddScoped<MeService>();
+builder.Services.AddScoped<AvatarService>();
 builder.Services.AddScoped<DepartmentsService>();
 builder.Services.AddScoped<DomainsService>();
 builder.Services.AddSingleton<CodeService>();
@@ -181,6 +182,7 @@ app.Use(async (context, next) =>
     if (context.User.HasClaim("must_change_password", "true") &&
         !context.Request.Path.StartsWithSegments("/api/v1/auth/change-password") &&
         !context.Request.Path.StartsWithSegments("/api/v1/auth/session") &&
+        !context.Request.Path.StartsWithSegments("/api/v1/auth/logout-all") &&
         !context.Request.Path.StartsWithSegments("/api/v1/auth/logout"))
     {
         context.Response.StatusCode = 403;

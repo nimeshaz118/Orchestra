@@ -85,6 +85,16 @@ public sealed class AuthController(AuthService auth, IConfiguration configuratio
         return Ok(new LogoutResponse("Logged out successfully."));
     }
 
+    [Authorize, HttpPost("logout-all")]
+    public async Task<IActionResult> LogoutAll(CancellationToken ct)
+    {
+        var userId = Guid.Parse(User.FindFirstValue(JwtRegisteredClaimNames.Sub)!);
+        var sessionId = Guid.Parse(User.FindFirstValue("sid")!);
+        await auth.LogoutAllAsync(userId, sessionId, ct);
+        ClearRefreshCookie();
+        return Ok(new LogoutResponse("Logged out from all devices successfully."));
+    }
+
     [Authorize, HttpGet("session")]
     public async Task<IActionResult> Session(CancellationToken ct)
     {

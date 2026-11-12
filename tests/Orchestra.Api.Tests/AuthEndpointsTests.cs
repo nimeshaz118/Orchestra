@@ -5,6 +5,7 @@ using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Diagnostics;
 using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
@@ -361,6 +362,8 @@ public sealed class ApiHost : WebApplicationFactory<Program>
 {
     private readonly string _dbName = Guid.NewGuid().ToString();
     public FakeEmailSender Email { get; } = new();
+    public bool FailSessionSave { get; set; }
+    public bool FailAvatarSave { get; set; }
 
     protected override void ConfigureWebHost(IWebHostBuilder builder)
     {
@@ -382,10 +385,23 @@ public sealed class ApiHost : WebApplicationFactory<Program>
         {
             services.RemoveAll<DbContextOptions<OrchestraDbContext>>();
             services.RemoveAll<IDbContextOptionsConfiguration<OrchestraDbContext>>();
-            services.AddDbContext<OrchestraDbContext>(o => o.UseInMemoryDatabase(_dbName));
+            services.AddDbContext<OrchestraDbContext>(o => o.UseInMemoryDatabase(_dbName)
+                .AddInterceptors(new SessionSaveFailure(this)));
             services.RemoveAll<IEmailSender>();
             services.AddSingleton<IEmailSender>(Email);
         });
+    }
+
+    private sealed class SessionSaveFailure(ApiHost host) : SaveChangesInterceptor
+    {
+        public override ValueTask<InterceptionResult<int>> SavingChangesAsync(
+            DbContextEventData eventData, InterceptionResult<int> result,
+            CancellationToken cancellationToken = default)
+        {
+            if (host.FailSessionSave || (host.FailAvatarSave &&
+                eventData.Context!.ChangeTracker.Entries<AppUser>().Any(e => e.Property(u => u.AvatarData).IsModified))) throw new DbUpdateException("Simulated database failure.");
+            return base.SavingChangesAsync(eventData, result, cancellationToken);
+        }
     }
 
     public async Task<Guid> SeedDepartmentAsync(string name, string status)
