@@ -147,7 +147,7 @@ public sealed class DepartmentManagementTests
 
         Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
         var error = await response.Content.ReadFromJsonAsync<ApiError>();
-        Assert.Equal("UNAUTHENTICATED", error?.Code);
+        Assert.Equal("INVALID_SESSION", error?.Code);
         Assert.False(string.IsNullOrWhiteSpace(error?.Message));
         Assert.False(string.IsNullOrWhiteSpace(error?.RequestId));
         Assert.False(error?.Retryable);
