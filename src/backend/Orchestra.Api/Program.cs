@@ -82,6 +82,21 @@ builder.Services.AddRateLimiter(options =>
 {
     options.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
 
+
+    options.OnRejected = async (context, cancellationToken) =>
+    {
+        context.HttpContext.Response.ContentType = "application/json";
+
+        await context.HttpContext.Response.WriteAsJsonAsync(
+            new
+            {
+                code = "RATE_LIMIT_EXCEEDED",
+                message = "Too many requests. Please try again later."
+            },
+            cancellationToken
+        );
+    };
+
     // Authentication: 20 requests per minute per IP
     options.AddPolicy("auth", context =>
         RateLimitPartition.GetFixedWindowLimiter(
