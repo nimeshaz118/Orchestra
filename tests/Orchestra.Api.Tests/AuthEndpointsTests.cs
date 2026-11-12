@@ -71,6 +71,10 @@ public sealed class AuthEndpointsTests
             value => value.Contains("httponly", StringComparison.OrdinalIgnoreCase));
         Assert.Contains(login.Headers.GetValues("Set-Cookie"),
             value => value.Contains("samesite=none", StringComparison.OrdinalIgnoreCase));
+        client.DefaultRequestHeaders.Add("Cookie",
+            login.Headers.GetValues("Set-Cookie")
+                .Single(value => value.StartsWith("orchestra_refresh=", StringComparison.Ordinal))
+                .Split(';', 2)[0]);
         client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", body!.AccessToken);
         var profile = await client.GetAsync("/api/v1/me");
         Assert.Equal(HttpStatusCode.OK, profile.StatusCode);
@@ -176,11 +180,18 @@ public sealed class ApiHost : WebApplicationFactory<Program>
 
     public async Task<HttpClient> LoginClientAsync(string email)
     {
-        var client = CreateClient();
+        var client = CreateClient(new WebApplicationFactoryClientOptions
+        {
+            HandleCookies = false
+        });
         var result = await client.PostAsJsonAsync("/api/v1/auth/login",
             new { email, password = "long-passphrase-123" });
         result.EnsureSuccessStatusCode();
         var response = await result.Content.ReadFromJsonAsync<LoginResponse>();
+        var refreshCookie = result.Headers.GetValues("Set-Cookie")
+            .Single(cookie => cookie.StartsWith("orchestra_refresh=", StringComparison.Ordinal))
+            .Split(';', 2)[0];
+        client.DefaultRequestHeaders.Add("Cookie", refreshCookie);
         client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", response!.AccessToken);
         return client;
     }
