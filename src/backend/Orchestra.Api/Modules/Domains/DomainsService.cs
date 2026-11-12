@@ -111,6 +111,9 @@ public sealed class DomainsService(OrchestraDbContext db)
         return new CreateDomainResult(ToDto(domain), Created: true);
     }
 
+
+    //Domain delete part
+    /*
     public async Task DeleteAsync(
         Guid domainId,
         Guid actorId,
@@ -142,6 +145,7 @@ public sealed class DomainsService(OrchestraDbContext db)
 
         await db.SaveChangesAsync(ct);
     }
+    */
 
     private static DomainDto ToDto(ApprovedEmailDomain domain) =>
         new(

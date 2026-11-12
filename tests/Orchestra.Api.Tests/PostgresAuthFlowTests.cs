@@ -105,8 +105,51 @@ public sealed class PostgresAuthFlowTests
                 });
                 Assert.Equal(HttpStatusCode.Created, registration.StatusCode);
             }
+           
 
-            var verifyCode = Assert.Single(host.Email.Sent).Code;
+            // Confirm the initial registration email was generated.
+            Assert.Single(host.Email.Sent);
+
+            // Move the initial code's creation time back by 61 seconds.
+            // This simulates waiting for the resend cooldown.
+            await using (var connection =
+                new NpgsqlConnection(testBuilder.ConnectionString))
+            {
+                await connection.OpenAsync();
+
+                await using var command = new NpgsqlCommand("""
+                    UPDATE ai_orchestration.verification_code
+                    SET created_at = created_at - INTERVAL '61 seconds'
+                    WHERE user_id = (
+                        SELECT user_id
+                        FROM ai_orchestration.app_user
+                        WHERE email = 'integration@example.test'
+                    )
+                    AND purpose = 'EMAIL_VERIFICATION'
+                    """, connection);
+
+                await command.ExecuteNonQueryAsync();
+            }
+
+            // Request another verification email.
+            var resendResponse = await client.PostAsJsonAsync(
+                "/api/v1/auth/resend-verification",
+                new { email = "integration@example.test" });
+
+            // Successful resend returns 200.
+            Assert.Equal(
+                HttpStatusCode.OK,
+                resendResponse.StatusCode);
+
+            // Two verification emails should now be recorded.
+            Assert.Equal(2, host.Email.Sent.Count);
+
+            // Use the newly issued code for the existing verification test.
+            var verifyCode = host.Email.Sent.Last().Code;
+                                
+
+            //var verifyCode = Assert.Single(host.Email.Sent).Code;
+            
             Assert.Equal(HttpStatusCode.NoContent, (await client.PostAsJsonAsync("/api/v1/auth/verify-email",
                 new { email = "integration@example.test", code = verifyCode })).StatusCode);
             Assert.Equal(HttpStatusCode.Conflict, (await client.PostAsJsonAsync("/api/v1/auth/verify-email",
