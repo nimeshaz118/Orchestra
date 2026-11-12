@@ -244,12 +244,12 @@ public sealed class AuthEndpointsTests
     }
 
     [Fact]
-    public async Task Forgot_password_returns_neutral_message_for_unknown_email()
+    public async Task Forgot_password_returns_not_found_for_unknown_email()
     {
         await using var host = new ApiHost();
         var response = await host.CreateClient().PostAsJsonAsync("/api/v1/auth/forgot-password",
             new { email = "unknown@example.test" });
-        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
         Assert.Empty(host.Email.Sent);
     }
 
