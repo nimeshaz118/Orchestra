@@ -20,6 +20,32 @@ public sealed class DepartmentsController(DepartmentsService departments) : Cont
     public async Task<IActionResult> SuperAdminList(CancellationToken ct)
         => Ok(await departments.AdminListAsync(ct));
 
+    [Authorize(Roles = "SUPER_ADMIN"), HttpGet("api/v1/super-admin/departments/{departmentId:guid}")]
+    public async Task<IActionResult> SuperAdminGet(Guid departmentId, CancellationToken ct)
+    => Ok(await departments.GetByIdAsync(departmentId, ct));
+
+    [Authorize(Roles = "SUPER_ADMIN"), HttpPatch("api/v1/super-admin/departments/{departmentId:guid}")]
+    public async Task<IActionResult> SuperAdminUpdate(
+        Guid departmentId, UpdateDepartmentRequest request, CancellationToken ct)
+    {
+        var actor = Guid.Parse(User.FindFirstValue(JwtRegisteredClaimNames.Sub)!);
+        return Ok(await departments.UpdateAsync(departmentId, request, actor, ct));
+    }
+
+    [Authorize(Roles = "SUPER_ADMIN"), HttpPost("api/v1/super-admin/departments/{departmentId:guid}/activate")]
+    public async Task<IActionResult> Activate(Guid departmentId, CancellationToken ct)
+    {
+        var actor = Guid.Parse(User.FindFirstValue(JwtRegisteredClaimNames.Sub)!);
+        return Ok(await departments.ActivateAsync(departmentId, actor, ct));
+    }
+
+    [Authorize(Roles = "SUPER_ADMIN"), HttpPost("api/v1/super-admin/departments/{departmentId:guid}/deactivate")]
+    public async Task<IActionResult> Deactivate(Guid departmentId, CancellationToken ct)
+    {
+        var actor = Guid.Parse(User.FindFirstValue(JwtRegisteredClaimNames.Sub)!);
+        return Ok(await departments.DeactivateAsync(departmentId, actor, ct));
+    }
+
     [Authorize(Roles = "ADMIN,SUPER_ADMIN"), HttpPost("api/v1/admin/departments")]
     public async Task<IActionResult> Create(CreateDepartmentRequest request, CancellationToken ct)
     {

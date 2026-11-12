@@ -112,15 +112,45 @@ app.UseExceptionHandler(handler => handler.Run(async context =>
     if (exception is ApiException apiError)
     {
         context.Response.StatusCode = apiError.StatusCode;
-        await context.Response.WriteAsJsonAsync(new ApiError(apiError.Code, apiError.Message,
-            context.TraceIdentifier));
+        await context.Response.WriteAsJsonAsync(new ApiError(
+            apiError.Code,
+            apiError.Message,
+            context.TraceIdentifier,
+            apiError.Retryable,
+            apiError.Errors));
         return;
     }
+
     app.Logger.LogError(exception, "Unhandled API error. Request ID: {RequestId}", context.TraceIdentifier);
     context.Response.StatusCode = 500;
     await context.Response.WriteAsJsonAsync(new ApiError("INTERNAL_ERROR", "An unexpected error occurred.",
         context.TraceIdentifier));
 }));
+
+app.UseStatusCodePages(async statusCodeContext =>
+{
+    var context = statusCodeContext.HttpContext;
+    var status = context.Response.StatusCode;
+
+    var (code, message, retryable) = status switch
+    {
+        400 => ("BAD_REQUEST", "The request could not be understood.", false),
+        401 => ("UNAUTHENTICATED", "Sign in to access this resource.", false),
+        403 => ("FORBIDDEN", "You do not have permission to perform this action.", false),
+        404 => ("NOT_FOUND", "The requested resource was not found.", false),
+        405 => ("METHOD_NOT_ALLOWED", "This HTTP method is not supported for this resource.", false),
+        409 => ("CONFLICT", "The request conflicts with the current resource state.", false),
+        413 => ("REQUEST_TOO_LARGE", "The request body is too large.", false),
+        415 => ("UNSUPPORTED_MEDIA_TYPE", "The request content type is not supported.", false),
+        422 => ("VALIDATION_FAILED", "The request contains invalid fields.", false),
+        429 => ("RATE_LIMITED", "Too many requests. Try again later.", true),
+        _ => ("REQUEST_FAILED", "The request could not be completed.", false)
+    };
+
+    await context.Response.WriteAsJsonAsync(
+        new ApiError(code, message, context.TraceIdentifier, retryable),
+        context.RequestAborted);
+});
 
 if (app.Environment.IsDevelopment()) app.MapOpenApi();
 app.UseHttpsRedirection();
