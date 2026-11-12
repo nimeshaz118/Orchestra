@@ -23,9 +23,12 @@ public sealed class AuthService(
 
     public async Task RegisterAsync(RegisterRequest request, CancellationToken ct)
     {
+        // Validate and normalize input
         var email = NormalizeEmail(request.Email);
+
         ValidatePassword(request.Password);
         var domain = email[(email.LastIndexOf('@') + 1)..];
+        //
         var allowAnyDomain = environment.IsDevelopment() &&
             configuration.GetValue<bool>("DevelopmentEmail:AllowAnyDomain") &&
             !string.IsNullOrWhiteSpace(configuration["DevelopmentEmail:Recipient"]);
@@ -74,7 +77,7 @@ public sealed class AuthService(
         var user = await FindByEmailAsync(request.Email, ct)
             ?? throw new ApiException(400, "INVALID_CODE", "The code is invalid or expired.");
         if (user.Status != "PENDING" || user.DeletedAt != null)
-            throw new ApiException(409, "INVALID_ACCOUNT_STATE", "This account cannot be verified.");
+            throw new ApiException(409, "INVALID_ACCOUNT_STATE", "This account/email cannot be verified or  it is already used.");
         var challenge = await ActiveChallengeAsync(user.UserId, VerifyPurpose, ct);
         if (challenge is null || !codes.Matches(user.UserId, VerifyPurpose, request.Code, challenge.CodeHash))
         {

@@ -15,6 +15,8 @@ using Orchestra.Api.Modules.Users;
 using Orchestra.Api.Modules.Users.Service;
 using Orchestra.Api.Modules.Users.UseCases;
 using Orchestra.Api.Modules.Users.Interfaces;
+using Orchestra.Api.Modules.Domains;
+
 
 var builder = WebApplication.CreateBuilder(args);
 builder.Services.AddSingleton(provider =>
@@ -33,6 +35,7 @@ builder.Services.AddScoped<AuthService>();
 // builder.Services.AddScoped<Revoke>();
 builder.Services.AddScoped<DepartmentsService>();
 builder.Services.AddScoped<UserPreferenceService>();
+builder.Services.AddScoped<DomainsService>();
 builder.Services.AddSingleton<CodeService>();
 builder.Services.AddSingleton<TokenService>();
 builder.Services.AddScoped<RevokeSessionUseCase>();
@@ -131,9 +134,23 @@ builder.Services.AddRateLimiter(options =>
 
 builder.Services.Configure<ApiBehaviorOptions>(options =>
 {
-    options.InvalidModelStateResponseFactory = context => new ObjectResult(new ApiError(
-        "VALIDATION_FAILED", "The request contains invalid fields.", context.HttpContext.TraceIdentifier))
-    { StatusCode = 422 };
+    options.InvalidModelStateResponseFactory = context =>
+    {
+        var errors = context.ModelState
+            .Where(field => field.Value?.Errors.Count > 0)
+            .ToDictionary(
+                field => field.Key,
+                field => field.Value!.Errors
+                    .Select(error => string.IsNullOrWhiteSpace(error.ErrorMessage)
+                        ? "The supplied value is invalid."
+                        : error.ErrorMessage)
+                    .ToArray());
+
+        return new ObjectResult(new ApiError(
+            "VALIDATION_FAILED", "The request contains invalid fields.",
+            context.HttpContext.TraceIdentifier, Errors: errors))
+        { StatusCode = 422 };
+    };
 });
 
 var app = builder.Build();
