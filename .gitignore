@@ -37,3 +37,7 @@ infrastructure/.volumes/
 *.sln.docstates
 Thumbs.db
 Desktop.ini
+
+
+#sonarqube for testing
+.sonarqube/
