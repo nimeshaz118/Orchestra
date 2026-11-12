@@ -57,10 +57,10 @@ public sealed class AuthController(AuthService auth, IConfiguration configuratio
             SetRefreshCookie(result.RefreshToken);
             return Ok(result.Response);
         }
-        catch (ApiException)
+        catch (ApiException ex)
         {
             ClearRefreshCookie();
-            throw;
+            return StatusCode(ex.StatusCode, Error(ex.Code, ex.Message));
         }
     }
 
@@ -68,9 +68,31 @@ public sealed class AuthController(AuthService auth, IConfiguration configuratio
     public async Task<IActionResult> Logout(CancellationToken ct)
     {
         if (!HasTrustedOrigin()) return StatusCode(403, Error("UNTRUSTED_ORIGIN", "This request origin is not allowed."));
-        if (Request.Cookies.TryGetValue(CookieName, out var token)) await auth.LogoutAsync(token, ct);
+
+        Guid? userId = null;
+        Guid? sessionId = null;
+        if (Request.Headers.ContainsKey("Authorization"))
+        {
+            if (User.Identity?.IsAuthenticated != true)
+                throw new ApiException(401, "INVALID_SESSION", "Please sign in again.");
+            userId = Guid.Parse(User.FindFirstValue(JwtRegisteredClaimNames.Sub)!);
+            sessionId = Guid.Parse(User.FindFirstValue("sid")!);
+        }
+        Request.Cookies.TryGetValue(CookieName, out var refreshToken);
+        await auth.LogoutAsync(userId, sessionId, refreshToken, ct);
+
         ClearRefreshCookie();
-        return NoContent();
+        return Ok(new LogoutResponse("Logged out successfully."));
+    }
+
+    [Authorize, HttpPost("logout-all")]
+    public async Task<IActionResult> LogoutAll(CancellationToken ct)
+    {
+        var userId = Guid.Parse(User.FindFirstValue(JwtRegisteredClaimNames.Sub)!);
+        var sessionId = Guid.Parse(User.FindFirstValue("sid")!);
+        await auth.LogoutAllAsync(userId, sessionId, ct);
+        ClearRefreshCookie();
+        return Ok(new LogoutResponse("Logged out from all devices successfully."));
     }
 
     [Authorize, HttpGet("session")]
@@ -85,7 +107,7 @@ public sealed class AuthController(AuthService auth, IConfiguration configuratio
     public async Task<IActionResult> ForgotPassword(EmailRequest request, CancellationToken ct)
     {
         await auth.ForgotPasswordAsync(request, ct);
-        return Ok(new { message = "If an eligible account exists, a recovery code will be sent." });
+        return Ok(new { message = "A recovery code will be sent." });
     }
 
     [HttpPost("verify-reset-code"), EnableRateLimiting("auth")]
@@ -97,7 +119,7 @@ public sealed class AuthController(AuthService auth, IConfiguration configuratio
     {
         await auth.ResetPasswordAsync(request, ct);
         ClearRefreshCookie();
-        return NoContent();
+        return Ok(new { message = "Password changed successfully." });
     }
 
     [Authorize, HttpPost("change-password"), EnableRateLimiting("auth")]
@@ -106,7 +128,7 @@ public sealed class AuthController(AuthService auth, IConfiguration configuratio
         var id = Guid.Parse(User.FindFirstValue(JwtRegisteredClaimNames.Sub)!);
         await auth.ChangePasswordAsync(id, request.CurrentPassword, request.NewPassword, ct);
         ClearRefreshCookie();
-        return NoContent();
+        return Ok(new { message = "Password changed successfully." });
     }
 
     private async Task<Models.Entities.AppUser> CurrentUserAsync(CancellationToken ct)
@@ -138,5 +160,3 @@ public sealed class AuthController(AuthService auth, IConfiguration configuratio
     private ApiError Error(string code, string message) => new(code, message, HttpContext.TraceIdentifier);
 }
 
-public sealed record ChangePasswordRequest([Required] string CurrentPassword,
-    [Required, MinLength(12)] string NewPassword);

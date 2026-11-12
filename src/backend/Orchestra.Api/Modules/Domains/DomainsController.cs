@@ -29,7 +29,7 @@ public sealed class DomainsController(DomainsService domains) : ControllerBase
             : Ok(result.Domain);
     }
 
-    [HttpDelete("{domainId}")]
+   /* [HttpDelete("{domainId}")]
     public async Task<IActionResult> Delete(
         Guid domainId,
         CancellationToken ct)
@@ -40,4 +40,5 @@ public sealed class DomainsController(DomainsService domains) : ControllerBase
         await domains.DeleteAsync(domainId, actorId, ct);
         return NoContent();
     }
+    */
 }

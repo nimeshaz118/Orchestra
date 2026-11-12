@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using Microsoft.EntityFrameworkCore;
 using Orchestra.Api.Models.Entities;
@@ -358,6 +358,8 @@ public partial class OrchestraDbContext : DbContext
             entity.HasKey(e => e.UserId).HasName("app_user_pkey");
 
             entity.ToTable("app_user", "ai_orchestration");
+
+            entity.Property(e => e.AvatarData).HasColumnName("avatar_data");
 
             entity.HasIndex(e => new { e.DepartmentId, e.Status }, "ix_app_user_department_status").HasFilter("(deleted_at IS NULL)");
 
