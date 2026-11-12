@@ -211,6 +211,31 @@ public sealed class AuthService(
         if (transaction != null) await transaction.CommitAsync(ct);
     }
 
+    public async Task LogoutAllAsync(Guid userId, Guid sessionId, CancellationToken ct)
+    {
+        await using var transaction = db.Database.IsRelational()
+            ? await db.Database.BeginTransactionAsync(ct) : null;
+        // Share refresh's account lock so a competing rotation cannot survive logout.
+        if (transaction != null) await LockSessionOwnerAsync(userId, ct);
+        if (!await db.AppUsers.AnyAsync(u => u.UserId == userId && u.Status == "ACTIVE" &&
+                u.DeletedAt == null && u.EmailVerifiedAt != null, ct))
+            throw new ApiException(401, "INVALID_SESSION", "Please sign in again.");
+
+        var now = DateTime.UtcNow;
+        var sessions = await db.RefreshTokens.Where(t => t.UserId == userId && t.RevokedAt == null)
+            .ToListAsync(ct);
+        if (!sessions.Any(t => t.FamilyId == sessionId && t.ExpiresAt > now))
+            throw new ApiException(401, "INVALID_SESSION", "Please sign in again.");
+
+        foreach (var session in sessions)
+        {
+            session.RevokedAt = now;
+            session.RevokedReason = "LOGOUT_ALL";
+        }
+        await db.SaveChangesAsync(ct);
+        if (transaction != null) await transaction.CommitAsync(ct);
+    }
+
     public async Task ForgotPasswordAsync(EmailRequest request, CancellationToken ct)
     {
         var user = await FindByEmailAsync(request.Email, ct);
