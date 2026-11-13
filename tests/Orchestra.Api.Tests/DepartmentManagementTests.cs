@@ -252,7 +252,7 @@ public sealed class DepartmentManagementTests
 
         Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
         var error = await response.Content.ReadFromJsonAsync<ApiError>();
-        Assert.Equal("INVALID_SESSION", error?.Code);
+        Assert.Equal("UNAUTHENTICATED", error?.Code);
         Assert.False(string.IsNullOrWhiteSpace(error?.Message));
         Assert.False(string.IsNullOrWhiteSpace(error?.RequestId));
         Assert.False(error?.Retryable);
@@ -260,12 +260,12 @@ public sealed class DepartmentManagementTests
         var activate = await client.PostAsync(
             $"/api/v1/super-admin/departments/{Guid.NewGuid()}/activate", null);
         Assert.Equal(HttpStatusCode.Unauthorized, activate.StatusCode);
-        Assert.Equal("INVALID_SESSION", (await activate.Content.ReadFromJsonAsync<ApiError>())?.Code);
+        Assert.Equal("UNAUTHENTICATED", (await activate.Content.ReadFromJsonAsync<ApiError>())?.Code);
 
         var deactivate = await client.PostAsync(
             $"/api/v1/super-admin/departments/{Guid.NewGuid()}/deactivate", null);
         Assert.Equal(HttpStatusCode.Unauthorized, deactivate.StatusCode);
-        Assert.Equal("INVALID_SESSION", (await deactivate.Content.ReadFromJsonAsync<ApiError>())?.Code);
+        Assert.Equal("UNAUTHENTICATED", (await deactivate.Content.ReadFromJsonAsync<ApiError>())?.Code);
     }
 
     [Fact]
