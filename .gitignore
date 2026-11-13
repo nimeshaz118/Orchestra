@@ -42,3 +42,4 @@ Desktop.ini
 
 #sonarqube for testing
 .sonarqube/
+docker-compose.sonarqube.yml
