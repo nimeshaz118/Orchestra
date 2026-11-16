@@ -19,8 +19,14 @@ public sealed class AvatarService(OrchestraDbContext db)
 
     public async Task<byte[]> ReadAsync(Guid userId, CancellationToken ct)
     {
-        var user = await RequireActiveUserAsync(userId, ct);
-        return user.AvatarData ?? throw NotFound();
+        if (!db.Database.IsNpgsql())
+            return (await RequireActiveUserAsync(userId, ct)).AvatarData ?? throw NotFound();
+
+        var rows = await db.ReadProcedureAsync("CALL ai_orchestration.api_get_avatar($1, 'api_rows')",
+            row => row.IsDBNull(0) ? null : row.GetFieldValue<byte[]>(0), ct, userId);
+        if (rows.Count == 0)
+            throw InvalidSession();
+        return rows[0] ?? throw NotFound();
     }
 
     public async Task DeleteAsync(Guid userId, CancellationToken ct)
@@ -36,7 +42,8 @@ public sealed class AvatarService(OrchestraDbContext db)
     private async Task<AppUser> RequireActiveUserAsync(Guid userId, CancellationToken ct) =>
         await db.AppUsers.SingleOrDefaultAsync(u => u.UserId == userId && u.Status == "ACTIVE" &&
             u.DeletedAt == null && u.EmailVerifiedAt != null, ct)
-        ?? throw new ApiException(401, "INVALID_SESSION", "Please sign in again.");
+        ?? throw InvalidSession();
 
+    private static ApiException InvalidSession() => new(401, "INVALID_SESSION", "Please sign in again.");
     private static ApiException NotFound() => new(404, "AVATAR_NOT_FOUND", "No avatar was found.");
 }

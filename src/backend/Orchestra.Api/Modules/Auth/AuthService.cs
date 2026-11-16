@@ -309,36 +309,69 @@ public sealed class AuthService(
     public async Task ChangePasswordAsync(Guid userId, string currentPassword, string newPassword, CancellationToken ct)
     {
         ValidatePassword(newPassword);
-        var user = await db.AppUsers.FirstAsync(u => u.UserId == userId, ct);
-        if (passwords.VerifyHashedPassword(user, user.PasswordHash, currentPassword) == PasswordVerificationResult.Failed)
-            throw new ApiException(400, "INVALID_PASSWORD", "The current password is incorrect.");
+
+        if (db.Database.IsNpgsql())
+        {
+            var rows = await db.ReadProcedureAsync("CALL ai_orchestration.api_get_password_state($1, 'api_rows')",
+                row => new AppUser { UserId = userId, PasswordHash = row.GetString(0), SecurityStamp = row.GetGuid(1) },
+                ct, userId);
+            var passwordState = rows.SingleOrDefault() ?? throw InvalidPasswordSession();
+            var hash = GetNewPasswordHash(passwordState, currentPassword, newPassword);
+            // Match the security stamp that we verified so a stale request cannot overwrite a newer change.
+            var changed = await db.CallBooleanProcedureAsync(
+                "CALL ai_orchestration.api_change_password($1, $2, $3, $4, NULL)", ct,
+                userId, passwordState.SecurityStamp, hash, Guid.NewGuid());
+            if (!changed)
+                throw InvalidPasswordSession();
+            return;
+        }
+
+        var user = await db.AppUsers.SingleOrDefaultAsync(u => u.UserId == userId && u.Status == "ACTIVE" &&
+            u.DeletedAt == null && u.EmailVerifiedAt != null, ct) ?? throw InvalidPasswordSession();
+        var newHash = GetNewPasswordHash(user, currentPassword, newPassword);
+        var sessions = await db.RefreshTokens.Where(t => t.UserId == userId && t.RevokedAt == null).ToListAsync(ct);
         var now = DateTime.UtcNow;
-        await using var transaction = await db.Database.BeginTransactionAsync(ct);
-        user.PasswordHash = passwords.HashPassword(user, newPassword);
+        user.PasswordHash = newHash;
         user.MustChangePassword = false;
         user.PasswordChangedAt = now;
         user.SecurityStamp = Guid.NewGuid();
+        foreach (var session in sessions)
+        {
+            session.RevokedAt = now;
+            session.RevokedReason = "PASSWORD_CHANGED";
+        }
         await db.SaveChangesAsync(ct);
-        await db.RefreshTokens.Where(t => t.UserId == userId && t.RevokedAt == null)
-            .ExecuteUpdateAsync(s => s.SetProperty(t => t.RevokedAt, now)
-                .SetProperty(t => t.RevokedReason, "PASSWORD_CHANGED"), ct);
-        await transaction.CommitAsync(ct);
     }
 
-    public Task<AppUser?> CurrentUserAsync(Guid id, CancellationToken ct) => db.AppUsers
-        .AsNoTracking().FirstOrDefaultAsync(u => u.UserId == id && u.DeletedAt == null && u.Status == "ACTIVE", ct);
+    private string GetNewPasswordHash(AppUser user, string currentPassword, string newPassword)
+    {
+        if (passwords.VerifyHashedPassword(user, user.PasswordHash, currentPassword) == PasswordVerificationResult.Failed)
+            throw new ApiException(400, "INVALID_PASSWORD", "The current password is incorrect.");
+        return passwords.HashPassword(user, newPassword);
+    }
+
+    private static ApiException InvalidPasswordSession() => new(401, "INVALID_SESSION", "Please sign in again.");
 
     public async Task<IReadOnlyList<SessionDto>> SessionsAsync(Guid userId, string? currentToken, CancellationToken ct)
     {
         if (string.IsNullOrWhiteSpace(currentToken))
-            throw new ApiException(401, "INVALID_SESSION", "The session has expired.");
+            throw ExpiredSession();
 
         var currentHash = TokenService.HashOpaqueToken(currentToken);
+        if (db.Database.IsNpgsql())
+        {
+            var rows = await db.ReadProcedureAsync("CALL ai_orchestration.api_list_sessions($1, $2, 'api_rows')",
+                row => new SessionDto(row.GetGuid(0), row.GetDateTime(1), row.GetDateTime(2),
+                    row.IsDBNull(3) ? null : row.GetDateTime(3), row.IsDBNull(4) ? null : row.GetString(4),
+                    row.GetBoolean(5)), ct, userId, currentHash);
+            return rows.Count > 0 ? rows : throw ExpiredSession();
+        }
+
         var currentSession = await db.RefreshTokens.AsNoTracking()
             .FirstOrDefaultAsync(t => t.TokenHash == currentHash && t.UserId == userId, ct);
         if (currentSession is null || currentSession.RevokedAt is not null ||
             currentSession.ExpiresAt <= DateTime.UtcNow)
-            throw new ApiException(401, "INVALID_SESSION", "The session has expired.");
+            throw ExpiredSession();
 
         var sessions = await db.RefreshTokens.AsNoTracking()
             .Where(t => t.UserId == userId && t.RevokedAt == null && t.ExpiresAt > DateTime.UtcNow)
@@ -346,6 +379,8 @@ public sealed class AuthService(
         return sessions.Select(t => new SessionDto(t.RefreshTokenId, t.CreatedAt, t.ExpiresAt,
             t.LastUsedAt, t.UserAgent, t.RefreshTokenId == currentSession.RefreshTokenId)).ToList();
     }
+
+    private static ApiException ExpiredSession() => new(401, "INVALID_SESSION", "The session has expired.");
 
     private async Task IssueCodeAsync(AppUser user, string purpose, CancellationToken ct)
     {

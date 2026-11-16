@@ -7,11 +7,29 @@ namespace Orchestra.Api.Modules.Users;
 
 public sealed class MeService(OrchestraDbContext db)
 {
-    public async Task<AppUser> UpdateAsync(Guid userId, UpdateMeRequest request, CancellationToken ct)
+    public async Task<MeDto> GetAsync(Guid userId, CancellationToken ct)
+    {
+        if (db.Database.IsNpgsql())
+        {
+            var rows = await db.ReadProcedureAsync("CALL ai_orchestration.api_get_profile($1, 'api_rows')",
+                row => new MeDto(row.GetGuid(0), row.GetString(1), row.GetString(2), row.GetString(3),
+                    row.IsDBNull(4) ? null : row.GetString(4), row.IsDBNull(5) ? null : row.GetString(5),
+                    row.IsDBNull(6) ? null : row.GetString(6), row.GetString(7),
+                    row.IsDBNull(8) ? null : row.GetGuid(8), row.GetString(9), row.GetBoolean(10),
+                    row.GetDateTime(11), row.GetDateTime(12)), ct, userId);
+            return rows.SingleOrDefault() ?? throw InvalidSession();
+        }
+
+        var user = await db.AppUsers.AsNoTracking().SingleOrDefaultAsync(
+            u => u.UserId == userId && u.DeletedAt == null && u.Status == "ACTIVE", ct);
+        return ToDto(user ?? throw InvalidSession());
+    }
+
+    public async Task<MeDto> UpdateAsync(Guid userId, UpdateMeRequest request, CancellationToken ct)
     {
         var user = await db.AppUsers.FirstOrDefaultAsync(
             u => u.UserId == userId && u.DeletedAt == null && u.Status == "ACTIVE", ct)
-            ?? throw new ApiException(401, "INVALID_SESSION", "Please sign in again.");
+            ?? throw InvalidSession();
 
         if (request.FirstName is null && request.LastName is null && request.DisplayName is null &&
             request.PhoneNumber is null && request.JobTitle is null)
@@ -31,8 +49,15 @@ public sealed class MeService(OrchestraDbContext db)
         user.UpdatedAt = DateTime.UtcNow;
         user.UpdatedByUserId = userId;
         await db.SaveChangesAsync(ct);
-        return user;
+        return ToDto(user);
     }
+
+    private static MeDto ToDto(AppUser user) =>
+        new(user.UserId, user.Email, user.FirstName, user.LastName, user.DisplayName, user.PhoneNumber,
+            user.JobTitle, user.RoleCode, user.DepartmentId, user.Status, user.MustChangePassword,
+            user.CreatedAt, user.UpdatedAt);
+
+    private static ApiException InvalidSession() => new(401, "INVALID_SESSION", "Please sign in again.");
 
     private static string? CleanOptional(string value, int max)
     {

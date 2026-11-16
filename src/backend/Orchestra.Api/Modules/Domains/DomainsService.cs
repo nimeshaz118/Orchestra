@@ -29,16 +29,13 @@ public sealed partial class DomainsService(OrchestraDbContext db)
 
 
     public Task<List<DomainDto>> ListAsync(CancellationToken ct) =>
-        db.ApprovedEmailDomains
-            .AsNoTracking()
-            .OrderBy(d => d.DomainName)
-            .Select(d => new DomainDto(
-                d.DomainId,
-                d.DomainName,
-                d.IsActive,
-                d.CreatedAt,
-                d.UpdatedAt))
-            .ToListAsync(ct);
+        db.Database.IsNpgsql()
+            ? db.ReadProcedureAsync("CALL ai_orchestration.api_list_domains('api_rows')",
+                row => new DomainDto(row.GetGuid(0), row.GetString(1), row.GetBoolean(2),
+                    row.GetDateTime(3), row.GetDateTime(4)), ct)
+            : db.ApprovedEmailDomains.AsNoTracking().OrderBy(d => d.DomainName)
+                .Select(d => new DomainDto(d.DomainId, d.DomainName, d.IsActive, d.CreatedAt, d.UpdatedAt))
+                .ToListAsync(ct);
 
     public async Task<CreateDomainResult> CreateAsync(
         CreateDomainRequest request,

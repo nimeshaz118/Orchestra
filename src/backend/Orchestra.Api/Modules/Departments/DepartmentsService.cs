@@ -22,24 +22,40 @@ public sealed record UpdateDepartmentRequest
 
 public sealed class DepartmentsService(OrchestraDbContext db)
 {
-    public Task<List<DepartmentDto>> PublicListAsync(CancellationToken ct) => db.Departments.AsNoTracking()
-        .Where(d => d.Status == "ACTIVE").OrderBy(d => d.DepartmentName)
-        .Select(d => new DepartmentDto(d.DepartmentId, d.DepartmentName, d.Description, d.Status))
-        .ToListAsync(ct);
+    public Task<List<DepartmentDto>> PublicListAsync(CancellationToken ct) => ListAsync(true, ct);
 
-    public Task<List<DepartmentDto>> AdminListAsync(CancellationToken ct) => db.Departments.AsNoTracking()
-        .OrderBy(d => d.DepartmentName)
-        .Select(d => new DepartmentDto(d.DepartmentId, d.DepartmentName, d.Description, d.Status))
-        .ToListAsync(ct);
+    public Task<List<DepartmentDto>> AdminListAsync(CancellationToken ct) => ListAsync(false, ct);
+
+    private Task<List<DepartmentDto>> ListAsync(bool activeOnly, CancellationToken ct) =>
+        db.Database.IsNpgsql()
+            ? db.ReadProcedureAsync("CALL ai_orchestration.api_list_departments($1, 'api_rows')",
+                ReadDepartment, ct, activeOnly)
+            : db.Departments.AsNoTracking().Where(d => !activeOnly || d.Status == "ACTIVE")
+                .OrderBy(d => d.DepartmentName)
+                .Select(d => new DepartmentDto(d.DepartmentId, d.DepartmentName, d.Description, d.Status))
+                .ToListAsync(ct);
 
     public async Task<DepartmentDto> GetByIdAsync(Guid departmentId, CancellationToken ct)
     {
-        var department = await db.Departments.AsNoTracking()
-            .FirstOrDefaultAsync(d => d.DepartmentId == departmentId, ct)
-            ?? throw new ApiException(404, "DEPARTMENT_NOT_FOUND", "The department was not found.");
+        DepartmentDto? department;
+        if (db.Database.IsNpgsql())
+        {
+            var rows = await db.ReadProcedureAsync("CALL ai_orchestration.api_get_department($1, 'api_rows')",
+                ReadDepartment, ct, departmentId);
+            department = rows.SingleOrDefault();
+        }
+        else
+        {
+            department = await db.Departments.AsNoTracking().Where(d => d.DepartmentId == departmentId)
+                .Select(d => new DepartmentDto(d.DepartmentId, d.DepartmentName, d.Description, d.Status))
+                .SingleOrDefaultAsync(ct);
+        }
 
-        return ToDto(department);
+        return department ?? throw new ApiException(404, "DEPARTMENT_NOT_FOUND", "The department was not found.");
     }
+
+    private static DepartmentDto ReadDepartment(NpgsqlDataReader row) =>
+        new(row.GetGuid(0), row.GetString(1), row.IsDBNull(2) ? null : row.GetString(2), row.GetString(3));
 
     private static ApiException InvalidField(
         string code, string message, IReadOnlyDictionary<string, string[]> errors)

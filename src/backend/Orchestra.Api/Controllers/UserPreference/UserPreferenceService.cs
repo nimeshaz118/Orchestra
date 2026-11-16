@@ -13,6 +13,13 @@ public sealed class UserPreferenceService(OrchestraDbContext db)
     public async Task<IReadOnlyDictionary<string, JsonElement>> GetAsync(
         Guid userId, CancellationToken ct)
     {
+        if (db.Database.IsNpgsql())
+        {
+            var rows = await db.ReadProcedureAsync("CALL ai_orchestration.api_list_preferences($1, 'api_rows')",
+                row => (Key: row.GetString(0), Value: row.GetString(1)), ct, userId);
+            return rows.ToDictionary(preference => preference.Key, preference => ParseValue(preference.Value));
+        }
+
         var preferences = await db.UserPreferences.AsNoTracking()
             .Where(preference => preference.UserId == userId)
             .ToListAsync(ct);

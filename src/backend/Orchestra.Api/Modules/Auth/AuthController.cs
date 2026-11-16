@@ -5,12 +5,13 @@ using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.RateLimiting;
 using Orchestra.Api.Common;
+using Orchestra.Api.Modules.Users;
 
 namespace Orchestra.Api.Modules.Auth;
 
 [ApiController]
 [Route("api/v1/auth")]
-public sealed class AuthController(AuthService auth, IConfiguration configuration) : ControllerBase
+public sealed class AuthController(AuthService auth, MeService me, IConfiguration configuration) : ControllerBase
 {
     private const string CookieName = "orchestra_refresh";
 
@@ -98,9 +99,9 @@ public sealed class AuthController(AuthService auth, IConfiguration configuratio
     [Authorize, HttpGet("session")]
     public async Task<IActionResult> Session(CancellationToken ct)
     {
-        var user = await CurrentUserAsync(ct);
-        return Ok(new UserDto(user.UserId, user.Email, user.FirstName, user.LastName,
-            user.RoleCode, user.DepartmentId, user.Status, user.MustChangePassword));
+        var user = await me.GetAsync(User.GetUserId(), ct);
+        return Ok(new UserDto(user.Id, user.Email, user.FirstName, user.LastName,
+            user.Role, user.DepartmentId, user.Status, user.MustChangePassword));
     }
 
     [HttpPost("forgot-password"), EnableRateLimiting("auth")]
@@ -129,13 +130,6 @@ public sealed class AuthController(AuthService auth, IConfiguration configuratio
         await auth.ChangePasswordAsync(id, request.CurrentPassword, request.NewPassword, ct);
         ClearRefreshCookie();
         return Ok(new { message = "Password changed successfully." });
-    }
-
-    private async Task<Models.Entities.AppUser> CurrentUserAsync(CancellationToken ct)
-    {
-        var id = Guid.Parse(User.FindFirstValue(JwtRegisteredClaimNames.Sub)!);
-        return await auth.CurrentUserAsync(id, ct)
-            ?? throw new ApiException(401, "INVALID_SESSION", "Please sign in again.");
     }
 
     private void SetRefreshCookie(string value) => Response.Cookies.Append(CookieName, value, new CookieOptions
