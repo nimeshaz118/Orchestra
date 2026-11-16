@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 
 namespace Orchestra.Api.Models.Entities;
@@ -6,6 +6,8 @@ namespace Orchestra.Api.Models.Entities;
 public partial class AppUser
 {
     public Guid UserId { get; set; }
+
+    public byte[]? AvatarData { get; set; }
 
     public string Email { get; set; } = null!;
 

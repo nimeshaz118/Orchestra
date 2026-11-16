@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using Microsoft.EntityFrameworkCore;
 using Orchestra.Api.Models.Entities;
@@ -61,6 +61,8 @@ public partial class OrchestraDbContext : DbContext
     public virtual DbSet<SystemLog> SystemLogs { get; set; }
 
     public virtual DbSet<UsageRecord> UsageRecords { get; set; }
+
+    public virtual DbSet<UserPreference> UserPreferences { get; set; }
 
     public virtual DbSet<VerificationCode> VerificationCodes { get; set; }
 
@@ -356,6 +358,8 @@ public partial class OrchestraDbContext : DbContext
             entity.HasKey(e => e.UserId).HasName("app_user_pkey");
 
             entity.ToTable("app_user", "ai_orchestration");
+
+            entity.Property(e => e.AvatarData).HasColumnName("avatar_data");
 
             entity.HasIndex(e => new { e.DepartmentId, e.Status }, "ix_app_user_department_status").HasFilter("(deleted_at IS NULL)");
 
@@ -1259,6 +1263,44 @@ public partial class OrchestraDbContext : DbContext
             entity.HasOne(d => d.User).WithMany(p => p.VerificationCodes)
                 .HasForeignKey(d => d.UserId)
                 .HasConstraintName("verification_code_user_id_fkey");
+        });
+        
+        modelBuilder.Entity<UserPreference>(entity =>
+        {
+            entity.HasKey(e => e.PreferenceId);
+
+            entity.ToTable("user_preference", "ai_orchestration");
+
+            entity.HasIndex(e => new { e.UserId, e.PreferenceKey })
+                .IsUnique();
+
+            entity.Property(e => e.PreferenceId)
+                .HasColumnName("preference_id")
+                .HasDefaultValueSql("gen_random_uuid()");
+
+            entity.Property(e => e.PreferenceKey)
+                .HasColumnName("preference_key")
+                .HasMaxLength(100);
+
+            entity.Property(e => e.PreferenceValue)
+                .HasColumnName("preference_value")
+                .HasColumnType("jsonb");
+
+            entity.Property(e => e.CreatedAt)
+                .HasColumnName("created_at")
+                .HasDefaultValueSql("now()");
+
+            entity.Property(e => e.UpdatedAt)
+                .HasColumnName("updated_at")
+                .HasDefaultValueSql("now()");
+
+            entity.Property(e => e.UserId)
+                .HasColumnName("user_id");
+
+            entity.HasOne(e => e.User)
+                .WithMany()
+                .HasForeignKey(e => e.UserId)
+                .OnDelete(DeleteBehavior.Cascade);
         });
 
         OnModelCreatingPartial(modelBuilder);
