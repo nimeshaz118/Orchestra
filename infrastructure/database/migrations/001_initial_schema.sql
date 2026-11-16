@@ -915,3 +915,38 @@ ORDER BY table_name;
 -- Future RAG migration (not part of this release):
 --   CREATE EXTENSION IF NOT EXISTS vector;
 --   Add knowledge_document, document_chunk, ingestion_job, and embedding tables.
+
+-- =========================================================
+-- Migration: Add user preferences
+-- =========================================================
+
+BEGIN;
+
+SET search_path TO ai_orchestration, public;
+
+CREATE TABLE user_preference (
+    preference_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+
+    user_id UUID NOT NULL
+        REFERENCES app_user(user_id)
+        ON DELETE CASCADE,
+
+    preference_key VARCHAR(100) NOT NULL,
+
+    preference_value JSONB NOT NULL,
+
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+
+    CONSTRAINT uq_user_preference_key
+        UNIQUE (user_id, preference_key)
+);
+
+-- Automatically update updated_at when a preference changes.
+CREATE TRIGGER trg_user_preference_updated_at
+BEFORE UPDATE ON user_preference
+FOR EACH ROW
+EXECUTE FUNCTION set_updated_at();
+
+COMMIT;
