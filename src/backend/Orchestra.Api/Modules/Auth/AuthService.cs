@@ -1,0 +1,549 @@
+using System.Security.Claims;
+using System.Data.Common;
+using System.Text.Json;
+using Microsoft.AspNetCore.Identity;
+using Microsoft.EntityFrameworkCore;
+using Npgsql;
+using Orchestra.Api.Common;
+using Orchestra.Api.Data;
+using Orchestra.Api.Models.Entities;
+
+namespace Orchestra.Api.Modules.Auth;
+
+public sealed record IssuedSession(LoginResponse Response, string RefreshToken);
+
+public sealed class AuthService(
+    OrchestraDbContext db, IPasswordHasher<AppUser> passwords, CodeService codes,
+    TokenService tokens, IEmailSender emailSender, IWebHostEnvironment environment,
+    IConfiguration configuration, AuthSettings settings)
+{
+    private const string VerifyPurpose = "EMAIL_VERIFICATION";
+    private const string ResetPurpose = "PASSWORD_RESET";
+    private const string ForcedRevokeReason = "forced revoke";
+
+    public async Task RegisterAsync(RegisterRequest request, CancellationToken ct)
+    {
+        // Validate and normalize input
+        var email = NormalizeEmail(request.Email);
+
+        ValidatePassword(request.Password);
+        var domain = email[(email.LastIndexOf('@') + 1)..];
+        //
+        var allowAnyDomain = environment.IsDevelopment() &&
+            configuration.GetValue<bool>("DevelopmentEmail:AllowAnyDomain") &&
+            !string.IsNullOrWhiteSpace(configuration["DevelopmentEmail:Recipient"]);
+        
+        #pragma warning disable CA1862 // Keep SQL-translatable comparison for EF Core.
+
+        if (!allowAnyDomain && !await db.ApprovedEmailDomains.AnyAsync(
+                d => d.IsActive && d.DomainName.ToLower() == domain, ct))
+            throw new ApiException(422, "EMAIL_DOMAIN_NOT_APPROVED", "Use an approved company email address.");
+        if (request.DepartmentId == Guid.Empty || !await db.Departments.AnyAsync(
+                d => d.DepartmentId == request.DepartmentId && d.Status == "ACTIVE", ct))
+            throw new ApiException(422, "DEPARTMENT_NOT_AVAILABLE", "Select an active department.");
+        #pragma warning restore CA1862
+
+        #pragma warning disable CA1862 // EF Core database query requires SQL-compatible comparison.
+        if (await db.AppUsers.AnyAsync(u => u.Email.ToLower() == email, ct))
+            throw new ApiException(409, "EMAIL_ALREADY_REGISTERED", "An account with this email already exists.");
+        #pragma warning restore CA1862
+
+        var now = DateTime.UtcNow;
+        var user = new AppUser
+        {
+            UserId = Guid.NewGuid(), Email = email, RoleCode = "USER",
+            DepartmentId = request.DepartmentId,
+            FirstName = CleanName(request.FirstName, 100), LastName = CleanName(request.LastName, 100),
+            Status = "PENDING", CreatedAt = now, UpdatedAt = now,
+            SecurityStamp = Guid.NewGuid()
+        };
+        user.PasswordHash = passwords.HashPassword(user, request.Password);
+        var plainCode = CodeService.NewCode();
+        var challenge = NewChallenge(user, VerifyPurpose, plainCode);
+        db.AppUsers.Add(user);
+        db.VerificationCodes.Add(challenge);
+        db.UserPreferences.Add(new UserPreference
+        {
+            PreferenceId = Guid.NewGuid(),
+            UserId = user.UserId,
+            PreferenceKey = "colorTheme",
+            PreferenceValue = JsonSerializer.Serialize("Dark"),
+            CreatedAt = now,
+            UpdatedAt = now
+        });
+        try { await db.SaveChangesAsync(ct); }
+        catch (DbUpdateException ex) when (IsUniqueViolation(ex))
+        {
+            throw new ApiException(409, "EMAIL_ALREADY_REGISTERED", "An account with this email already exists.");
+        }
+        await DeliverAsync(user.Email, VerifyPurpose, plainCode, challenge, ct);
+    }
+
+    public async Task VerifyEmailAsync(EmailCodeRequest request, CancellationToken ct)
+    {
+        var user = await FindByEmailAsync(request.Email, ct)
+            ?? throw new ApiException(400, "INVALID_CODE", "The code is invalid or expired.");
+        if (user.Status != "PENDING" || user.DeletedAt != null)
+            throw new ApiException(409, "INVALID_ACCOUNT_STATE", "This account/email cannot be verified or  it is already used.");
+        var challenge = await ActiveChallengeAsync(user.UserId, VerifyPurpose, ct);
+        if (challenge is null || !codes.Matches(user.UserId, VerifyPurpose, request.Code, challenge.CodeHash))
+        {
+            await RecordBadCodeAsync(challenge, ct);
+            throw new ApiException(400, "INVALID_CODE", "The code is invalid or expired.");
+        }
+        var now = DateTime.UtcNow;
+        await using var transaction = await db.Database.BeginTransactionAsync(ct);
+        var consumed = await db.VerificationCodes.Where(c => c.VerificationCodeId == challenge.VerificationCodeId &&
+            c.UsedAt == null && c.InvalidatedAt == null && c.ExpiresAt > now && c.FailedAttempts < 5)
+            .ExecuteUpdateAsync(s => s.SetProperty(c => c.UsedAt, now), ct);
+        if (consumed != 1)
+            throw new ApiException(400, "INVALID_CODE", "The code is invalid or expired.");
+        user.Status = "ACTIVE";
+        user.EmailVerifiedAt = now;
+        await db.SaveChangesAsync(ct);
+        await transaction.CommitAsync(ct);
+    }
+
+    public async Task ResendVerificationAsync(EmailRequest request, CancellationToken ct)
+    {
+        var user = await FindByEmailAsync(request.Email, ct);
+        if (user is null || user.Status != "PENDING" || user.DeletedAt != null) return;
+        await IssueCodeAsync(user, VerifyPurpose, ct);
+    }
+
+    public async Task<IssuedSession> LoginAsync(LoginRequest request, string? ip, string? userAgent, CancellationToken ct)
+    {
+        var user = await FindByEmailAsync(request.Email, ct);
+        var now = DateTime.UtcNow;
+        if (user is null || user.DeletedAt != null) throw InvalidLogin();
+        if (user.LockedUntil > now)
+            throw new ApiException(429, "LOGIN_THROTTLED", "Too many login attempts. Try again later.");
+        if (passwords.VerifyHashedPassword(user, user.PasswordHash, request.Password) == PasswordVerificationResult.Failed)
+        {
+            user.FailedLoginAttempts++;
+            if (user.FailedLoginAttempts >= 5) user.LockedUntil = now.AddMinutes(15);
+            await db.SaveChangesAsync(ct);
+            throw InvalidLogin();
+        }
+        if (user.Status != "ACTIVE" && user.Status != "PENDING")
+            throw new ApiException(403, "ACCOUNT_DISABLED", "This account is disabled.");
+        if (user.EmailVerifiedAt == null || user.Status == "PENDING")
+            throw new ApiException(403, "EMAIL_NOT_VERIFIED", "Verify your email before signing in.");
+        user.FailedLoginAttempts = 0;
+        user.LockedUntil = null;
+        user.LastLoginAt = now;
+        var session = NewRefreshToken(user, Guid.NewGuid(), null, ip, userAgent);
+        db.RefreshTokens.Add(session.Entity);
+        var response = tokens.AccessToken(user, session.Entity.FamilyId);
+        await db.SaveChangesAsync(ct);
+        return new IssuedSession(response, session.Plain);
+    }
+
+    public async Task<IssuedSession> RefreshAsync(string plain, string? ip, string? userAgent, CancellationToken ct)
+    {
+        var hash = TokenService.HashOpaqueToken(plain);
+        var old = await db.RefreshTokens.AsNoTracking().FirstOrDefaultAsync(t => t.TokenHash == hash, ct)
+            ?? throw new ApiException(401, "INVALID_SESSION", "The session has expired.");
+        if (!await db.AppUsers.AnyAsync(u => u.UserId == old.UserId && u.Status == "ACTIVE" &&
+            u.EmailVerifiedAt != null && u.DeletedAt == null, ct))
+            throw new ApiException(401, "INVALID_SESSION", "Please sign in again.");
+        await using var transaction = await db.Database.BeginTransactionAsync(ct);
+        // Serialize rotation and logout for this account, including competing token generations.
+        await LockSessionOwnerAsync(old.UserId, ct);
+        old = await db.RefreshTokens.AsNoTracking().SingleAsync(t => t.RefreshTokenId == old.RefreshTokenId, ct);
+        var now = DateTime.UtcNow;
+        if (old.RevokedAt != null && old.RevokedReason == "ROTATED")
+        {
+            await db.RefreshTokens.Where(t => t.UserId == old.UserId && t.FamilyId == old.FamilyId && t.RevokedAt == null)
+                .ExecuteUpdateAsync(s => s.SetProperty(t => t.RevokedAt, now)
+                    .SetProperty(t => t.RevokedReason, "REUSE_DETECTED"), ct);
+            await transaction.CommitAsync(ct);
+            throw new ApiException(409, "SESSION_REUSED", "Please sign in again.");
+        }
+        if (old.RevokedAt != null || old.ExpiresAt <= now) throw new ApiException(401, "INVALID_SESSION", "The session has expired.");
+        var user = await db.AppUsers.FirstOrDefaultAsync(u => u.UserId == old.UserId, ct);
+        if (user is null || user.Status != "ACTIVE" || user.EmailVerifiedAt == null || user.DeletedAt != null)
+            throw new ApiException(401, "INVALID_SESSION", "Please sign in again.");
+
+        var changed = await db.RefreshTokens.Where(t => t.RefreshTokenId == old.RefreshTokenId && t.RevokedAt == null)
+            .ExecuteUpdateAsync(s => s.SetProperty(t => t.RevokedAt, now)
+                .SetProperty(t => t.RevokedReason, "ROTATED")
+                .SetProperty(t => t.LastUsedAt, now), ct);
+        if (changed != 1)
+        {
+            await transaction.RollbackAsync(ct);
+            await db.RefreshTokens.Where(t => t.UserId == old.UserId && t.FamilyId == old.FamilyId && t.RevokedAt == null)
+                .ExecuteUpdateAsync(s => s.SetProperty(t => t.RevokedAt, now)
+                    .SetProperty(t => t.RevokedReason, "REUSE_DETECTED"), ct);
+            throw new ApiException(409, "SESSION_REUSED", "Please sign in again.");
+        }
+        var next = NewRefreshToken(user, old.FamilyId, old.RefreshTokenId, ip, userAgent);
+        db.RefreshTokens.Add(next.Entity);
+        await db.SaveChangesAsync(ct);
+        await db.RefreshTokens.Where(t => t.RefreshTokenId == old.RefreshTokenId)
+            .ExecuteUpdateAsync(s => s.SetProperty(t => t.ReplacedByTokenId, next.Entity.RefreshTokenId), ct);
+        var response = tokens.AccessToken(user, old.FamilyId);
+        await transaction.CommitAsync(ct);
+        return new IssuedSession(response, next.Plain);
+    }
+
+    private Task<int> LockSessionOwnerAsync(Guid userId, CancellationToken ct) =>
+        db.Database.ExecuteSqlInterpolatedAsync(
+            $"SELECT user_id FROM ai_orchestration.app_user WHERE user_id = {userId} FOR UPDATE", ct);
+
+    public async Task LogoutAsync(Guid? userId, Guid? sessionId, string? plainRefreshToken, CancellationToken ct)
+    {
+        if (userId == null && string.IsNullOrWhiteSpace(plainRefreshToken))
+            throw new ApiException(401, "INVALID_SESSION", "Please sign in again.");
+        RefreshToken? supplied = null;
+        if (!string.IsNullOrWhiteSpace(plainRefreshToken))
+        {
+            var hash = TokenService.HashOpaqueToken(plainRefreshToken);
+            supplied = await db.RefreshTokens.AsNoTracking().SingleOrDefaultAsync(t => t.TokenHash == hash, ct)
+                ?? throw new ApiException(404, "SESSION_NOT_FOUND", "The session was not found.");
+            if ((userId != null && (supplied.UserId != userId || supplied.FamilyId != sessionId)))
+                throw new ApiException(401, "INVALID_SESSION", "The credentials do not identify the same session.");
+            userId = supplied.UserId;
+            sessionId = supplied.FamilyId;
+        }
+        await using var transaction = db.Database.IsRelational()
+            ? await db.Database.BeginTransactionAsync(ct) : null;
+        if (transaction != null) await LockSessionOwnerAsync(userId!.Value, ct);
+        if (supplied != null)
+        {
+            supplied = await db.RefreshTokens.AsNoTracking().SingleAsync(t => t.RefreshTokenId == supplied.RefreshTokenId, ct);
+            if (supplied.RevokedAt != null || supplied.ExpiresAt <= DateTime.UtcNow)
+                throw new ApiException(401, "INVALID_SESSION", "Please sign in again.");
+        }
+        var family = await db.RefreshTokens.Where(t => t.UserId == userId && t.FamilyId == sessionId).ToListAsync(ct);
+        if (family.Count == 0)
+            throw new ApiException(404, "SESSION_NOT_FOUND", "The session was not found.");
+        var now = DateTime.UtcNow;
+        if (!family.Any(t => t.RevokedAt == null && t.ExpiresAt > now))
+            throw new ApiException(401, "INVALID_SESSION", "Please sign in again.");
+        foreach (var token in family.Where(t => t.RevokedAt == null))
+        {
+            token.RevokedAt = now;
+            token.RevokedReason = "LOGOUT";
+        }
+        await db.SaveChangesAsync(ct);
+        if (transaction != null) await transaction.CommitAsync(ct);
+    }
+
+    public async Task LogoutAllAsync(Guid userId, Guid sessionId, CancellationToken ct)
+    {
+        await using var transaction = db.Database.IsRelational()
+            ? await db.Database.BeginTransactionAsync(ct) : null;
+        // Share refresh's account lock so a competing rotation cannot survive logout.
+        if (transaction != null) await LockSessionOwnerAsync(userId, ct);
+        if (!await db.AppUsers.AnyAsync(u => u.UserId == userId && u.Status == "ACTIVE" &&
+                u.DeletedAt == null && u.EmailVerifiedAt != null, ct))
+            throw new ApiException(401, "INVALID_SESSION", "Please sign in again.");
+
+        var now = DateTime.UtcNow;
+        var sessions = await db.RefreshTokens.Where(t => t.UserId == userId && t.RevokedAt == null)
+            .ToListAsync(ct);
+        if (!sessions.Any(t => t.FamilyId == sessionId && t.ExpiresAt > now))
+            throw new ApiException(401, "INVALID_SESSION", "Please sign in again.");
+
+        foreach (var session in sessions)
+        {
+            session.RevokedAt = now;
+            session.RevokedReason = "LOGOUT_ALL";
+        }
+        await db.SaveChangesAsync(ct);
+        if (transaction != null) await transaction.CommitAsync(ct);
+    }
+
+    public async Task ForgotPasswordAsync(EmailRequest request, CancellationToken ct)
+    {
+        var user = await FindByEmailAsync(request.Email, ct);
+        if (user is null || user.Status != "ACTIVE" || user.DeletedAt != null)
+            throw new ApiException(404, "EMAIL_NOT_FOUND", "No account was found with this email address.");
+        await IssueCodeAsync(user, ResetPurpose, ct);
+    }
+
+    public async Task<string> VerifyResetCodeAsync(EmailCodeRequest request, CancellationToken ct)
+    {
+        var user = await FindByEmailAsync(request.Email, ct)
+            ?? throw new ApiException(400, "INVALID_CODE", "The code is invalid or expired.");
+        if (user.Status != "ACTIVE" || user.DeletedAt != null)
+            throw new ApiException(400, "INVALID_CODE", "The code is invalid or expired.");
+        var challenge = await ActiveChallengeAsync(user.UserId, ResetPurpose, ct);
+        if (challenge is null || challenge.SecurityStampSnapshot != user.SecurityStamp ||
+            !codes.Matches(user.UserId, ResetPurpose, request.Code, challenge.CodeHash))
+        {
+            await RecordBadCodeAsync(challenge, ct);
+            throw new ApiException(400, "INVALID_CODE", "The code is invalid or expired.");
+        }
+        return tokens.ResetToken(user, challenge.VerificationCodeId);
+    }
+
+    public async Task ResetPasswordAsync(ResetPasswordRequest request, CancellationToken ct)
+    {
+        ValidatePassword(request.NewPassword);
+        var parsed = tokens.ValidateResetToken(request.ResetToken)
+            ?? throw new ApiException(400, "INVALID_RESET_TOKEN", "The reset token is invalid or expired.");
+        var user = await db.AppUsers.FirstOrDefaultAsync(u => u.UserId == parsed.UserId, ct);
+        if (user is null || user.SecurityStamp != parsed.Stamp || user.Status != "ACTIVE" || user.DeletedAt != null)
+            throw new ApiException(400, "INVALID_RESET_TOKEN", "The reset token is invalid or expired.");
+        var now = DateTime.UtcNow;
+        await using var transaction = await db.Database.BeginTransactionAsync(ct);
+        var consumed = await db.VerificationCodes.Where(c => c.VerificationCodeId == parsed.ChallengeId &&
+            c.UserId == user.UserId && c.Purpose == ResetPurpose &&
+            c.SecurityStampSnapshot == parsed.Stamp && c.UsedAt == null &&
+            c.InvalidatedAt == null && c.ExpiresAt > now && c.FailedAttempts < 5)
+            .ExecuteUpdateAsync(s => s.SetProperty(c => c.UsedAt, now), ct);
+        if (consumed != 1) throw new ApiException(400, "INVALID_RESET_TOKEN", "The reset token is invalid or expired.");
+        user.PasswordHash = passwords.HashPassword(user, request.NewPassword);
+        user.SecurityStamp = Guid.NewGuid();
+        user.PasswordChangedAt = now;
+        user.MustChangePassword = false;
+        await db.SaveChangesAsync(ct);
+        await db.RefreshTokens.Where(t => t.UserId == user.UserId && t.RevokedAt == null)
+            .ExecuteUpdateAsync(s => s.SetProperty(t => t.RevokedAt, now)
+                .SetProperty(t => t.RevokedReason, "PASSWORD_RESET"), ct);
+        await transaction.CommitAsync(ct);
+    }
+
+    public async Task ChangePasswordAsync(Guid userId, string currentPassword, string newPassword, CancellationToken ct)
+    {
+        ValidatePassword(newPassword);
+
+        if (db.Database.IsNpgsql())
+        {
+            var rows = await db.ReadProcedureAsync("CALL ai_orchestration.api_get_password_state($1, 'api_rows')",
+                row => new AppUser { UserId = userId, PasswordHash = row.GetString(0), SecurityStamp = row.GetGuid(1) },
+                ct, userId);
+            var passwordState = rows.SingleOrDefault() ?? throw InvalidPasswordSession();
+            var hash = GetNewPasswordHash(passwordState, currentPassword, newPassword);
+            // Match the security stamp that we verified so a stale request cannot overwrite a newer change.
+            var changed = await db.CallBooleanProcedureAsync(
+                "CALL ai_orchestration.api_change_password($1, $2, $3, $4, NULL)", ct,
+                userId, passwordState.SecurityStamp, hash, Guid.NewGuid());
+            if (!changed)
+                throw InvalidPasswordSession();
+            return;
+        }
+
+        var user = await db.AppUsers.SingleOrDefaultAsync(u => u.UserId == userId && u.Status == "ACTIVE" &&
+            u.DeletedAt == null && u.EmailVerifiedAt != null, ct) ?? throw InvalidPasswordSession();
+        var newHash = GetNewPasswordHash(user, currentPassword, newPassword);
+        var sessions = await db.RefreshTokens.Where(t => t.UserId == userId && t.RevokedAt == null).ToListAsync(ct);
+        var now = DateTime.UtcNow;
+        user.PasswordHash = newHash;
+        user.MustChangePassword = false;
+        user.PasswordChangedAt = now;
+        user.SecurityStamp = Guid.NewGuid();
+        foreach (var session in sessions)
+        {
+            session.RevokedAt = now;
+            session.RevokedReason = "PASSWORD_CHANGED";
+        }
+        await db.SaveChangesAsync(ct);
+    }
+
+    private string GetNewPasswordHash(AppUser user, string currentPassword, string newPassword)
+    {
+        if (passwords.VerifyHashedPassword(user, user.PasswordHash, currentPassword) == PasswordVerificationResult.Failed)
+            throw new ApiException(400, "INVALID_PASSWORD", "The current password is incorrect.");
+        return passwords.HashPassword(user, newPassword);
+    }
+
+    private static ApiException InvalidPasswordSession() => new(401, "INVALID_SESSION", "Please sign in again.");
+
+    public async Task<IReadOnlyList<SessionDto>> SessionsAsync(Guid userId, string? currentToken, CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(currentToken))
+            throw ExpiredSession();
+
+        var currentHash = TokenService.HashOpaqueToken(currentToken);
+        if (db.Database.IsNpgsql())
+        {
+            var rows = await db.ReadProcedureAsync("CALL ai_orchestration.api_list_sessions($1, $2, 'api_rows')",
+                row => new SessionDto(row.GetGuid(0), row.GetDateTime(1), row.GetDateTime(2),
+                    row.IsDBNull(3) ? null : row.GetDateTime(3), row.IsDBNull(4) ? null : row.GetString(4),
+                    row.GetBoolean(5)), ct, userId, currentHash);
+            return rows.Count > 0 ? rows : throw ExpiredSession();
+        }
+
+        var currentSession = await db.RefreshTokens.AsNoTracking()
+            .FirstOrDefaultAsync(t => t.TokenHash == currentHash && t.UserId == userId, ct);
+        if (currentSession is null || currentSession.RevokedAt is not null ||
+            currentSession.ExpiresAt <= DateTime.UtcNow)
+            throw ExpiredSession();
+
+        var sessions = await db.RefreshTokens.AsNoTracking()
+            .Where(t => t.UserId == userId && t.RevokedAt == null && t.ExpiresAt > DateTime.UtcNow)
+            .OrderByDescending(t => t.CreatedAt).Take(50).ToListAsync(ct);
+        return sessions.Select(t => new SessionDto(t.RefreshTokenId, t.CreatedAt, t.ExpiresAt,
+            t.LastUsedAt, t.UserAgent, t.RefreshTokenId == currentSession.RefreshTokenId)).ToList();
+    }
+
+    private static ApiException ExpiredSession() => new(401, "INVALID_SESSION", "The session has expired.");
+
+    private async Task IssueCodeAsync(AppUser user, string purpose, CancellationToken ct)
+    {
+        var last = await db.VerificationCodes.AsNoTracking()
+            .Where(c => c.UserId == user.UserId && c.Purpose == purpose)
+            .OrderByDescending(c => c.CreatedAt).FirstOrDefaultAsync(ct);
+        if (last is not null && last.CreatedAt > DateTime.UtcNow.AddSeconds(-60))
+            throw new ApiException(429, "CODE_RESEND_LIMIT", "Wait a minute before requesting another code.");
+        var now = DateTime.UtcNow;
+        await db.VerificationCodes.Where(c => c.UserId == user.UserId && c.Purpose == purpose &&
+            c.UsedAt == null && c.InvalidatedAt == null)
+            .ExecuteUpdateAsync(s => s.SetProperty(c => c.InvalidatedAt, now), ct);
+        var plainCode = CodeService.NewCode();
+        var challenge = NewChallenge(user, purpose, plainCode);
+        db.VerificationCodes.Add(challenge);
+        await db.SaveChangesAsync(ct);
+        await DeliverAsync(user.Email, purpose, plainCode, challenge, ct);
+    }
+
+    private async Task DeliverAsync(string email, string purpose, string code, VerificationCode challenge,
+        CancellationToken ct)
+    {
+        try
+        {
+            await emailSender.SendCodeAsync(email, purpose == VerifyPurpose ? "verification" : "password reset", code, ct);
+            challenge.DeliveryStatus = "SENT";
+            await db.SaveChangesAsync(ct);
+        }
+        catch (Exception ex) when (ex is HttpRequestException or InvalidOperationException ||
+            (ex is TaskCanceledException && !ct.IsCancellationRequested))
+        {
+            challenge.DeliveryStatus = "FAILED";
+            challenge.InvalidatedAt = DateTime.UtcNow;
+            await db.SaveChangesAsync(ct);
+            throw new ApiException(503, "EMAIL_UNAVAILABLE", "Email delivery is temporarily unavailable.");
+        }
+    }
+
+    private VerificationCode NewChallenge(AppUser user, string purpose, string code) => new()
+    {
+        VerificationCodeId = Guid.NewGuid(), UserId = user.UserId,
+        Purpose = purpose, CodeHash = codes.Hash(user.UserId, purpose, code),
+        SecurityStampSnapshot = purpose == ResetPurpose ? user.SecurityStamp : null,
+        DeliveryStatus = "PENDING", FailedAttempts = 0,
+        CreatedAt = DateTime.UtcNow, ExpiresAt = DateTime.UtcNow.AddMinutes(10)
+    };
+
+    private Task<VerificationCode?> ActiveChallengeAsync(Guid userId, string purpose, CancellationToken ct) =>
+        db.VerificationCodes.AsNoTracking().Where(c => c.UserId == userId && c.Purpose == purpose &&
+            c.UsedAt == null && c.InvalidatedAt == null && c.ExpiresAt > DateTime.UtcNow && c.FailedAttempts < 5)
+            .OrderByDescending(c => c.CreatedAt).FirstOrDefaultAsync(ct);
+
+    private Task<int> RecordBadCodeAsync(VerificationCode? challenge, CancellationToken ct) => challenge is null
+        ? Task.FromResult(0)
+        : db.VerificationCodes.Where(c => c.VerificationCodeId == challenge.VerificationCodeId &&
+            c.FailedAttempts < 5 && c.UsedAt == null && c.InvalidatedAt == null)
+            .ExecuteUpdateAsync(s => s.SetProperty(c => c.FailedAttempts, c => c.FailedAttempts + 1), ct);
+
+    private Task<AppUser?> FindByEmailAsync(string email, CancellationToken ct)
+    {
+        var normalized = NormalizeEmail(email);
+
+        #pragma warning disable CA1862 // EF Core requires SQL-translatable comparison.
+        return db.AppUsers.FirstOrDefaultAsync(u => u.Email.ToLower() == normalized, ct);
+        #pragma warning restore CA1862
+    }
+
+    private (RefreshToken Entity, string Plain) NewRefreshToken(AppUser user, Guid familyId,
+        Guid? parentId, string? ip, string? userAgent)
+    {
+        var plain = TokenService.NewOpaqueToken();
+        return (new RefreshToken
+        {
+            RefreshTokenId = Guid.NewGuid(), UserId = user.UserId, TokenHash = TokenService.HashOpaqueToken(plain),
+            FamilyId = familyId, ParentTokenId = parentId, CreatedAt = DateTime.UtcNow,
+            ExpiresAt = DateTime.UtcNow.AddDays(settings.RefreshTokenDays),
+            CreatedByIp = System.Net.IPAddress.TryParse(ip, out var parsedIp) ? parsedIp : null,
+            UserAgent = userAgent is { Length: > 500 } ? userAgent[..500] : userAgent
+        }, plain);
+    }
+
+    public async Task RevokeSessionAsync(
+        Guid userId,
+        Guid sessionId,
+        CancellationToken ct)
+    {
+        RefreshToken? session;
+        try
+        {
+            session = await db.RefreshTokens
+                .FirstOrDefaultAsync(
+                    x => x.RefreshTokenId == sessionId && x.UserId == userId,
+                    ct);
+        }
+        catch (DbException)
+        {
+            throw new ApiException(500, "DATABASE_OPERATION_FAILED",
+                "The session could not be loaded.");
+        }
+
+        if (session is null)
+            throw new ApiException(404, "SESSION_NOT_FOUND", "The session was not found.");
+        if (session.RevokedAt is not null)
+            throw new ApiException(409, "SESSION_ALREADY_REVOKED", "The session has already been revoked.");
+
+        session.RevokedAt = DateTime.UtcNow;
+        session.RevokedReason = ForcedRevokeReason;
+        try
+        {
+            await db.SaveChangesAsync(ct);
+        }
+        catch (DbUpdateException)
+        {
+            throw new ApiException(500, "DATABASE_OPERATION_FAILED",
+                "The session could not be revoked.");
+        }
+    }
+    public async Task<int> RevokeOtherSessionsAsync(
+        Guid userId,
+        string? currentToken,
+        CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(currentToken))
+            throw new ApiException(401, "INVALID_SESSION", "The session has expired.");
+
+        var currentHash = TokenService.HashOpaqueToken(currentToken);
+
+        var sessions = await db.RefreshTokens
+            .Where(x =>
+                x.UserId == userId &&
+                x.RevokedAt == null &&
+                x.ExpiresAt > DateTime.UtcNow &&
+                x.TokenHash != currentHash)
+            .ToListAsync(ct);
+
+        if (sessions.Count == 0)
+            throw new ApiException(409, "ALL_OTHER_SESSIONS_REVOKED",
+                "All other sessions have already been revoked.");
+
+        foreach (var session in sessions)
+        {
+            session.RevokedAt = DateTime.UtcNow;
+            session.RevokedReason = ForcedRevokeReason;
+        }
+
+        await db.SaveChangesAsync(ct);
+
+        return sessions.Count;
+    }
+    private static string NormalizeEmail(string email) => email.Trim().ToLowerInvariant();
+    private static string CleanName(string value, int max)
+    {
+        var result = value.Trim();
+        if (result.Length is 0 || result.Length > max)
+            throw new ApiException(422, "INVALID_NAME", "Enter a valid first and last name.");
+        return result;
+    }
+    private static void ValidatePassword(string password)
+    {
+        if (password.Length is < 12 or > 128)
+            throw new ApiException(422, "INVALID_PASSWORD", "Password must be between 12 and 128 characters.");
+    }
+    private static ApiException InvalidLogin() => new(401, "INVALID_CREDENTIALS", "Invalid email or password.");
+    private static bool IsUniqueViolation(DbUpdateException ex) => ex.InnerException is PostgresException
+        { SqlState: PostgresErrorCodes.UniqueViolation };
+}
