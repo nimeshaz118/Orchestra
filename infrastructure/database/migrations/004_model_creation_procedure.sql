@@ -14,15 +14,6 @@ LANGUAGE plpgsql AS $$
 DECLARE
     actor_role VARCHAR(30);
 BEGIN
-    IF NOT EXISTS (
-        SELECT 1
-        FROM ai_orchestration.ai_provider
-        WHERE provider_id = p_provider_id
-    ) THEN
-        RAISE EXCEPTION 'Referenced provider does not exist'
-            USING ERRCODE = 'P0003';
-    END IF;
-
     IF EXISTS (
         SELECT 1
         FROM ai_orchestration.ai_model

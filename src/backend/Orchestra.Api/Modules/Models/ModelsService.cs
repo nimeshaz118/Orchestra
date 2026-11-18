@@ -5,10 +5,11 @@ using Npgsql;
 using NpgsqlTypes;
 using Orchestra.Api.Common;
 using Orchestra.Api.Data;
+using Orchestra.Api.Modules.Providers;
 
 namespace Orchestra.Api.Modules.Models;
 
-public sealed class ModelsService(OrchestraDbContext db)
+public sealed class ModelsService(OrchestraDbContext db, ProvidersService providers)
 {
     public async Task<List<ModelDto>> ListAsync(CancellationToken ct)
     {
@@ -89,6 +90,8 @@ public sealed class ModelsService(OrchestraDbContext db)
         if (!db.Database.IsNpgsql())
             throw new InvalidOperationException("Model creation requires PostgreSQL.");
 
+        await providers.GetAsync(request.ProviderId, ct);
+
         var modelId = await CallCreateProcedureAsync(
             request.ProviderId, providerModelKey!, displayName!, modelType!,
             request.ContextWindowTokens, request.QualityTier,
@@ -139,11 +142,6 @@ public sealed class ModelsService(OrchestraDbContext db)
 
             await transaction.CommitAsync(ct);
             return modelId;
-        }
-        catch (PostgresException ex) when (ex.SqlState == "P0003")
-        {
-            await transaction.RollbackAsync(ct);
-            throw new ApiException(404, "PROVIDER_NOT_FOUND", "The provider was not found.");
         }
         catch (PostgresException ex) when (ex.SqlState is "P0002" or PostgresErrorCodes.UniqueViolation)
         {
