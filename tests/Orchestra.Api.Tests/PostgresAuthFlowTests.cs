@@ -12,6 +12,7 @@ using Npgsql;
 using Orchestra.Api.Modules.Auth;
 using Orchestra.Api.Modules.Departments;
 using Orchestra.Api.Modules.Domains;
+using Orchestra.Api.Modules.FeatureFlags;
 using Orchestra.Api.Modules.Users;
 using Xunit;
 
@@ -105,6 +106,65 @@ public sealed class PostgresAuthFlowTests
         Assert.Equal(HttpStatusCode.Unauthorized, (await second.GetAsync("/api/v1/auth/session")).StatusCode);
         Assert.Equal(HttpStatusCode.Unauthorized, (await second.PostAsync("/api/v1/auth/refresh", null)).StatusCode);
         await SignInAsync(first, "another-super-passphrase");
+    });
+
+    [Fact]
+    [Trait("Category", "PostgreSQL")]
+    public Task Super_admin_can_list_only_non_sensitive_boolean_feature_flags() => WithDatabaseAsync(async connection =>
+    {
+        const string url = "/api/v1/super-admin/feature-flags";
+        using var host = new PostgresHost(connection);
+        using var client = host.CreateClient(new WebApplicationFactoryClientOptions { BaseAddress = new Uri("https://localhost") });
+
+        using var anonymous = await client.GetAsync(url);
+        Assert.Equal(HttpStatusCode.Unauthorized, anonymous.StatusCode);
+
+        async Task SignInAsync(string email, string password)
+        {
+            client.DefaultRequestHeaders.Authorization = null;
+            using var login = await client.PostAsJsonAsync("/api/v1/auth/login", new { email, password });
+            login.EnsureSuccessStatusCode();
+            var session = (await login.Content.ReadFromJsonAsync<LoginResponse>())!;
+            client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", session.AccessToken);
+        }
+
+        async Task SignInAfterPasswordChangeAsync(string email, string currentPassword, string newPassword)
+        {
+            await SignInAsync(email, currentPassword);
+            using var change = await client.PostAsJsonAsync("/api/v1/auth/change-password", new { currentPassword, newPassword });
+            change.EnsureSuccessStatusCode();
+            await SignInAsync(email, newPassword);
+        }
+
+        await SignInAfterPasswordChangeAsync("admin@example.test", "initial-admin-passphrase", "changed-admin-passphrase");
+        using var admin = await client.GetAsync(url);
+        Assert.Equal(HttpStatusCode.Forbidden, admin.StatusCode);
+
+        await SignInAfterPasswordChangeAsync("super@example.test", "initial-super-passphrase", "changed-super-passphrase");
+        Assert.Empty((await client.GetFromJsonAsync<List<FeatureFlagDto>>(url))!);
+
+        await using (var db = new NpgsqlConnection(connection))
+        {
+            await db.OpenAsync();
+            await using var seed = new NpgsqlCommand("""
+                INSERT INTO ai_orchestration.platform_setting (setting_key, setting_value, description, is_sensitive, updated_at)
+                VALUES ('feature_flag.zeta', 'false', NULL, FALSE, '2026-01-01 00:00:00+00'),
+                       ('feature_flag.alpha', 'true', 'Alpha feature', FALSE, '2026-01-01 00:00:00+00'),
+                       ('feature_flag.secret', 'true', 'Sensitive flag', TRUE, '2026-01-01 00:00:00+00'),
+                       ('feature_flag.invalid', '"true"', NULL, FALSE, '2026-01-01 00:00:00+00'),
+                       ('feature_flag.', 'true', NULL, FALSE, '2026-01-01 00:00:00+00'),
+                       ('featureXflag.unrelated', 'true', NULL, FALSE, '2026-01-01 00:00:00+00');
+                """, db);
+            await seed.ExecuteNonQueryAsync();
+        }
+
+        var flags = await client.GetFromJsonAsync<List<FeatureFlagDto>>(url);
+        var updatedAt = new DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+        Assert.Equal(new[]
+        {
+            new FeatureFlagDto("alpha", true, "Alpha feature", updatedAt),
+            new FeatureFlagDto("zeta", false, null, updatedAt)
+        }, flags);
     });
 
     [Fact]
@@ -402,7 +462,8 @@ public sealed class PostgresAuthFlowTests
                 var baseline = FindSchemaFile();
                 var migrations = Path.GetDirectoryName(baseline)!;
                 foreach (var file in new[] { baseline, Path.Combine(migrations, "002_user_avatar.sql"),
-                    Path.Combine(migrations, "003_api_stored_procedures.sql") })
+                    Path.Combine(migrations, "003_api_stored_procedures.sql"),
+                    Path.Combine(migrations, "004_super_admin_feature_flags.sql") })
                 {
                     await using var apply = new NpgsqlCommand(await File.ReadAllTextAsync(file), database);
                     await apply.ExecuteNonQueryAsync();
