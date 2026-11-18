@@ -17,6 +17,7 @@ using Orchestra.Api.Modules.Users.Service;
 using Orchestra.Api.Modules.Users.UseCases;
 using Orchestra.Api.Modules.Users.Interfaces;
 using Orchestra.Api.Modules.Domains;
+using Orchestra.Api.Modules.Providers;
 
 var builder = WebApplication.CreateBuilder(args);
 builder.Services.AddSingleton(provider =>
@@ -42,6 +43,7 @@ builder.Services.AddSingleton<CodeService>();
 builder.Services.AddSingleton<TokenService>();
 builder.Services.AddScoped<RevokeSessionUseCase>();
 builder.Services.AddScoped<RevokeOtherSessionsUseCase>();
+builder.Services.AddScoped<ProvidersService>();
 
 builder.Services.AddScoped<ISessionService, SessionService>();
 builder.Services.AddHttpClient<IEmailSender, ResendEmailSender>(client =>
