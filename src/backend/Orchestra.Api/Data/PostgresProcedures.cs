@@ -23,6 +23,7 @@ internal static class PostgresProcedures
             batch.BatchCommands.Add(new NpgsqlBatchCommand("CLOSE api_rows"));
 
             await using var reader = await batch.ExecuteReaderAsync(ct);
+
             var rows = new List<T>();
             while (await reader.ReadAsync(ct))
                 rows.Add(read(reader));

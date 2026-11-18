@@ -5,7 +5,10 @@ Apply these scripts in order to a new PostgreSQL database before running the API
 1. [`001_initial_schema.sql`](migrations/001_initial_schema.sql) creates the approved baseline.
 2. [`002_user_avatar.sql`](migrations/002_user_avatar.sql) ensures the avatar column exists.
 3. [`003_api_stored_procedures.sql`](migrations/003_api_stored_procedures.sql) installs the API procedures and creates the preferences table if it is missing.
-4. [`004_super_admin_feature_flags.sql`](migrations/004_super_admin_feature_flags.sql) installs the Super Admin feature flag listing procedure.
+4. [`004_provider_read_procedures.sql`](migrations/004_provider_read_procedures.sql) installs provider list/read procedures.
+5. [`004_model_creation_procedure.sql`](migrations/004_model_creation_procedure.sql) installs model creation and model read procedures.
+6. [`004_super_admin_feature_flags.sql`](migrations/004_super_admin_feature_flags.sql) installs the Super Admin feature flag listing procedure.
+
 
 Docker Compose runs these scripts when it initializes an empty volume. For an existing database or Docker volume, apply any missing scripts in that order using pgAdmin or `psql` before starting the updated API. `0002_schema.sql` is an alternate full schema script; it is not part of this sequence.
 

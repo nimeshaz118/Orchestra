@@ -18,6 +18,8 @@ using Orchestra.Api.Modules.Users.Service;
 using Orchestra.Api.Modules.Users.UseCases;
 using Orchestra.Api.Modules.Users.Interfaces;
 using Orchestra.Api.Modules.Domains;
+using Orchestra.Api.Modules.Providers;
+using Orchestra.Api.Modules.Models;
 
 var builder = WebApplication.CreateBuilder(args);
 builder.Services.AddSingleton(provider =>
@@ -40,10 +42,12 @@ builder.Services.AddScoped<DepartmentsService>();
 builder.Services.AddScoped<FeatureFlagsService>();
 builder.Services.AddScoped<UserPreferenceService>();
 builder.Services.AddScoped<DomainsService>();
+builder.Services.AddScoped<ModelsService>();
 builder.Services.AddSingleton<CodeService>();
 builder.Services.AddSingleton<TokenService>();
 builder.Services.AddScoped<RevokeSessionUseCase>();
 builder.Services.AddScoped<RevokeOtherSessionsUseCase>();
+builder.Services.AddScoped<ProvidersService>();
 
 builder.Services.AddScoped<ISessionService, SessionService>();
 builder.Services.AddHttpClient<IEmailSender, ResendEmailSender>(client =>
@@ -266,4 +270,3 @@ internal static class HealthCheckTags
 {
     internal static readonly string[] Ready = ["ready"];
 }
-
