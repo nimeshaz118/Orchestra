@@ -11,6 +11,7 @@ using Orchestra.Api.Controllers.UserPreference;
 using Orchestra.Api.Data;
 using Orchestra.Api.Models.Entities;
 using Orchestra.Api.Modules.Auth;
+using Orchestra.Api.Modules.Catalog;
 using Orchestra.Api.Modules.Departments;
 using Orchestra.Api.Modules.FeatureFlags;
 using Orchestra.Api.Modules.Users;
@@ -48,6 +49,9 @@ builder.Services.AddSingleton<TokenService>();
 builder.Services.AddScoped<RevokeSessionUseCase>();
 builder.Services.AddScoped<RevokeOtherSessionsUseCase>();
 builder.Services.AddScoped<ProvidersService>();
+builder.Services.AddScoped<CatalogTestsService>();
+builder.Services.AddHttpClient<AiDiagnosticsClient>(client => client.Timeout = Timeout.InfiniteTimeSpan)
+    .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler { AllowAutoRedirect = false, UseCookies = false });
 
 builder.Services.AddScoped<ISessionService, SessionService>();
 builder.Services.AddHttpClient<IEmailSender, ResendEmailSender>(client =>

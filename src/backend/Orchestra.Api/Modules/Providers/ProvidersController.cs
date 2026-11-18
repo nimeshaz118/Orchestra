@@ -2,13 +2,14 @@ using System.IdentityModel.Tokens.Jwt;
 using System.Security.Claims;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using Orchestra.Api.Modules.Catalog;
 
 namespace Orchestra.Api.Modules.Providers;
 
 [ApiController]
 [Route("api/v1/super-admin/providers")]
 [Authorize(Roles = "SUPER_ADMIN")]
-public sealed class ProvidersController(ProvidersService providers) : ControllerBase
+public sealed class ProvidersController(ProvidersService providers, CatalogTestsService tests) : ControllerBase
 {
     [HttpGet]
     public async Task<IActionResult> List(CancellationToken ct) =>
@@ -17,6 +18,10 @@ public sealed class ProvidersController(ProvidersService providers) : Controller
     [HttpGet("{providerId:guid}")]
     public async Task<IActionResult> Get(Guid providerId, CancellationToken ct) =>
         Ok(await providers.GetAsync(providerId, ct));
+
+    [HttpPost("{providerId:guid}/test")]
+    public async Task<IActionResult> Test(Guid providerId, CancellationToken ct) =>
+        Ok(await tests.TestProviderAsync(providerId, ct));
 
     [HttpPost]
     public async Task<IActionResult> Create(
