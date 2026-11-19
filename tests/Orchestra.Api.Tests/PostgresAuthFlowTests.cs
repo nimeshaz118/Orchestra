@@ -1,5 +1,7 @@
 using System.Net;
+using System.Net.Http.Headers;
 using System.Net.Http.Json;
+using System.Text.Json;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.Extensions.Configuration;
@@ -8,6 +10,9 @@ using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Logging;
 using Npgsql;
 using Orchestra.Api.Modules.Auth;
+using Orchestra.Api.Modules.Departments;
+using Orchestra.Api.Modules.Domains;
+using Orchestra.Api.Modules.Users;
 using Xunit;
 
 namespace Orchestra.Api.Tests;
@@ -16,35 +21,97 @@ public sealed class PostgresAuthFlowTests
 {
     [Fact]
     [Trait("Category", "PostgreSQL")]
-    public async Task Verification_refresh_reuse_and_password_reset_are_single_use()
+    public Task Stored_procedure_endpoints_preserve_scoping_and_session_revocation() => WithDatabaseAsync(async connection =>
     {
-        if (Environment.GetEnvironmentVariable("ORCHESTRA_RUN_POSTGRES_TESTS") != "true") return;
-        var source = Environment.GetEnvironmentVariable("ORCHESTRA_TEST_ADMIN_CONNECTION") ??
-            new ConfigurationBuilder().AddUserSecrets(typeof(Program).Assembly, optional: true)
-                .Build().GetConnectionString("OrchestraDb");
-        Assert.False(string.IsNullOrWhiteSpace(source),
-            "Set ORCHESTRA_TEST_ADMIN_CONNECTION or the API's OrchestraDb User Secret.");
-        var databaseName = "orchestra_auth_test_" + Guid.NewGuid().ToString("N")[..12];
-        var adminBuilder = new NpgsqlConnectionStringBuilder(source);
-        var testBuilder = new NpgsqlConnectionStringBuilder(source) { Database = databaseName, Pooling = false };
-        await using var admin = new NpgsqlConnection(adminBuilder.ConnectionString);
-        await admin.OpenAsync();
-        var created = false;
-        try
+        await using (var db = new NpgsqlConnection(connection))
         {
-            await using (var create = new NpgsqlCommand($"CREATE DATABASE \"{databaseName}\"", admin))
-                await create.ExecuteNonQueryAsync();
-            created = true;
-            var script = await File.ReadAllTextAsync(FindSchemaFile()) + "\n" +
-                await File.ReadAllTextAsync(Path.Combine(Path.GetDirectoryName(FindSchemaFile())!, "002_user_avatar.sql"));
-            await using (var database = new NpgsqlConnection(testBuilder.ConnectionString))
-            {
-                await database.OpenAsync();
-                await using var apply = new NpgsqlCommand(script, database);
-                await apply.ExecuteNonQueryAsync();
-            }
+            await db.OpenAsync();
+            await using var seed = new NpgsqlCommand("""
+                INSERT INTO ai_orchestration.department(department_name, description, status)
+                VALUES ('Zoology', NULL, 'ACTIVE'), ('Accounting', 'Closed', 'INACTIVE'), ('Biology', NULL, 'ACTIVE');
+                INSERT INTO ai_orchestration.approved_email_domain(domain_name, is_active)
+                VALUES ('z.example.test', TRUE), ('a.example.test', FALSE);
+                """, db);
+            await seed.ExecuteNonQueryAsync();
+        }
 
-            using var host = new PostgresHost(testBuilder.ConnectionString);
+        using var host = new PostgresHost(connection);
+        using var first = host.CreateClient(new WebApplicationFactoryClientOptions { BaseAddress = new Uri("https://localhost") });
+        using var second = host.CreateClient(new WebApplicationFactoryClientOptions { BaseAddress = new Uri("https://localhost") });
+
+        var publicDepartments = (await first.GetFromJsonAsync<List<DepartmentDto>>("/api/v1/public/departments"))!;
+        Assert.Equal(new[] { "Biology", "Zoology" }, publicDepartments.Select(d => d.Name));
+
+        async Task SignInAsync(HttpClient client, string password)
+        {
+            using var login = await client.PostAsJsonAsync("/api/v1/auth/login",
+                new { email = "super@example.test", password });
+            login.EnsureSuccessStatusCode();
+            var session = (await login.Content.ReadFromJsonAsync<LoginResponse>())!;
+            client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", session.AccessToken);
+        }
+
+        await SignInAsync(first, "initial-super-passphrase");
+        var sessionUser = (await first.GetFromJsonAsync<UserDto>("/api/v1/auth/session"))!;
+        Assert.True(sessionUser.MustChangePassword);
+        Assert.Equal("SUPER_ADMIN", sessionUser.Role);
+        using var initialChange = await first.PostAsJsonAsync("/api/v1/auth/change-password",
+            new { currentPassword = "initial-super-passphrase", newPassword = "changed-super-passphrase" });
+        initialChange.EnsureSuccessStatusCode();
+        await SignInAsync(first, "changed-super-passphrase");
+        await SignInAsync(second, "changed-super-passphrase");
+
+        var departments = (await first.GetFromJsonAsync<List<DepartmentDto>>("/api/v1/super-admin/departments"))!;
+        Assert.Equal(new[] { "Accounting", "Biology", "Zoology" }, departments.Select(d => d.Name));
+        var inactive = departments[0];
+        Assert.Equal("INACTIVE", inactive.Status);
+        Assert.Equal(inactive, await first.GetFromJsonAsync<DepartmentDto>($"/api/v1/super-admin/departments/{inactive.Id}"));
+        Assert.Equal(HttpStatusCode.NotFound, (await first.GetAsync($"/api/v1/super-admin/departments/{Guid.NewGuid()}")).StatusCode);
+        var domains = (await first.GetFromJsonAsync<List<DomainDto>>("/api/v1/admin/domains"))!;
+        Assert.Equal(new[] { "a.example.test", "z.example.test" }, domains.Select(d => d.DomainName));
+        Assert.False(domains[0].IsActive);
+
+        var profile = (await first.GetFromJsonAsync<MeDto>("/api/v1/me"))!;
+        Assert.Equal(sessionUser.Id, profile.Id);
+        Assert.False(profile.MustChangePassword);
+        Assert.Null(profile.DepartmentId);
+        Assert.Empty((await first.GetFromJsonAsync<Dictionary<string, JsonElement>>("/api/v1/me/preferences"))!);
+        using var savedPreferences = await first.PatchAsJsonAsync("/api/v1/me/preferences", new { layout = new { compact = true } });
+        savedPreferences.EnsureSuccessStatusCode();
+        var preferences = (await second.GetFromJsonAsync<Dictionary<string, JsonElement>>("/api/v1/me/preferences"))!;
+        Assert.True(preferences["layout"].GetProperty("compact").GetBoolean());
+
+        Assert.Equal(HttpStatusCode.NotFound, (await first.GetAsync("/api/v1/me/avatar")).StatusCode);
+        await using (var db = new NpgsqlConnection(connection))
+        {
+            await db.OpenAsync();
+            await using var avatar = new NpgsqlCommand(
+                "UPDATE ai_orchestration.app_user SET avatar_data = decode('010203', 'hex') WHERE user_id = $1", db);
+            avatar.Parameters.Add(new NpgsqlParameter { Value = profile.Id });
+            await avatar.ExecuteNonQueryAsync();
+        }
+        Assert.Equal(new byte[] { 1, 2, 3 }, await first.GetByteArrayAsync("/api/v1/me/avatar"));
+
+        var sessions = (await first.GetFromJsonAsync<List<SessionDto>>("/api/v1/me/sessions"))!;
+        Assert.Equal(2, sessions.Count);
+        Assert.False(sessions[0].IsCurrent);
+        Assert.True(sessions[1].IsCurrent);
+        using var wrongPassword = await first.PostAsJsonAsync("/api/v1/me/password",
+            new { currentPassword = "wrong-current-password", newPassword = "another-super-passphrase" });
+        Assert.Equal(HttpStatusCode.BadRequest, wrongPassword.StatusCode);
+        using var passwordChange = await first.PostAsJsonAsync("/api/v1/me/password",
+            new { currentPassword = "changed-super-passphrase", newPassword = "another-super-passphrase" });
+        passwordChange.EnsureSuccessStatusCode();
+        Assert.Equal(HttpStatusCode.Unauthorized, (await second.GetAsync("/api/v1/auth/session")).StatusCode);
+        Assert.Equal(HttpStatusCode.Unauthorized, (await second.PostAsync("/api/v1/auth/refresh", null)).StatusCode);
+        await SignInAsync(first, "another-super-passphrase");
+    });
+
+    [Fact]
+    [Trait("Category", "PostgreSQL")]
+    public Task Verification_refresh_reuse_and_password_reset_are_single_use() => WithDatabaseAsync(async connection =>
+        {
+            using var host = new PostgresHost(connection);
             using var client = host.CreateClient(new WebApplicationFactoryClientOptions
             {
                 BaseAddress = new Uri("https://localhost")
@@ -93,7 +160,7 @@ public sealed class PostgresAuthFlowTests
                 new { name = "Finance", description = "Finance team" })).StatusCode);
             client.DefaultRequestHeaders.Authorization = null;
 
-            await using (var database = new NpgsqlConnection(testBuilder.ConnectionString))
+            await using (var database = new NpgsqlConnection(connection))
             {
                 await database.OpenAsync();
                 await using var seed = new NpgsqlCommand(
@@ -113,10 +180,9 @@ public sealed class PostgresAuthFlowTests
 
             // Move the initial code's creation time back by 61 seconds.
             // This simulates waiting for the resend cooldown.
-            await using (var connection =
-                new NpgsqlConnection(testBuilder.ConnectionString))
+            await using (var resendConnection = new NpgsqlConnection(connection))
             {
-                await connection.OpenAsync();
+                await resendConnection.OpenAsync();
 
                 await using var command = new NpgsqlCommand("""
                     UPDATE ai_orchestration.verification_code
@@ -127,7 +193,7 @@ public sealed class PostgresAuthFlowTests
                         WHERE email = 'integration@example.test'
                     )
                     AND purpose = 'EMAIL_VERIFICATION'
-                    """, connection);
+                    """, resendConnection);
 
                 await command.ExecuteNonQueryAsync();
             }
@@ -162,7 +228,7 @@ public sealed class PostgresAuthFlowTests
             var oldCookie = login.Headers.GetValues("Set-Cookie").Single().Split(';')[0];
             var oldAccess = (await login.Content.ReadFromJsonAsync<LoginResponse>())!.AccessToken;
             // Upgrade a previously applied separate-table version without losing its image.
-            await using (var upgradeConnection = new NpgsqlConnection(testBuilder.ConnectionString))
+            await using (var upgradeConnection = new NpgsqlConnection(connection))
             {
                 await upgradeConnection.OpenAsync();
                 await using var oldTable = new NpgsqlCommand("""
@@ -184,7 +250,7 @@ public sealed class PostgresAuthFlowTests
                 Assert.Equal(DBNull.Value, await removed.ExecuteScalarAsync());
             }
             // A new API host reads the same bytes from PostgreSQL after upload.
-            using (var avatarHost = new PostgresHost(testBuilder.ConnectionString))
+            using (var avatarHost = new PostgresHost(connection))
             using (var avatarClient = avatarHost.CreateClient(new WebApplicationFactoryClientOptions { BaseAddress = new Uri("https://localhost") }))
             {
                 avatarClient.DefaultRequestHeaders.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", oldAccess);
@@ -197,14 +263,14 @@ public sealed class PostgresAuthFlowTests
                 using var form = new MultipartFormDataContent { { file, "file", "avatar.png" } };
                 Assert.Equal(HttpStatusCode.OK, (await avatarClient.PutAsync("/api/v1/me/avatar", form)).StatusCode);
             }
-            using (var restartedHost = new PostgresHost(testBuilder.ConnectionString))
+            using (var restartedHost = new PostgresHost(connection))
             using (var restartedClient = restartedHost.CreateClient(new WebApplicationFactoryClientOptions { BaseAddress = new Uri("https://localhost") }))
             {
                 restartedClient.DefaultRequestHeaders.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", oldAccess);
                 var stored = await restartedClient.GetByteArrayAsync("/api/v1/me/avatar");
-                await using var connection = new NpgsqlConnection(testBuilder.ConnectionString);
-                await connection.OpenAsync();
-                await using var query = new NpgsqlCommand("SELECT avatar_data FROM ai_orchestration.app_user WHERE email = 'integration@example.test'", connection);
+                await using var avatarConnection = new NpgsqlConnection(connection);
+                await avatarConnection.OpenAsync();
+                await using var query = new NpgsqlCommand("SELECT avatar_data FROM ai_orchestration.app_user WHERE email = 'integration@example.test'", avatarConnection);
                 Assert.Equal(stored, (byte[])(await query.ExecuteScalarAsync())!);
                 Assert.Equal(HttpStatusCode.NoContent, (await restartedClient.DeleteAsync("/api/v1/me/avatar")).StatusCode);
                 Assert.Equal(DBNull.Value, await query.ExecuteScalarAsync());
@@ -243,7 +309,7 @@ public sealed class PostgresAuthFlowTests
             Assert.Equal(HttpStatusCode.Unauthorized, (await replayClient.SendAsync(loggedOutRefresh)).StatusCode);
 
             // Competing refresh requests must never leave two usable successors.
-            using var concurrencyHost = new PostgresHost(testBuilder.ConnectionString);
+            using var concurrencyHost = new PostgresHost(connection);
             using var concurrencyClient = concurrencyHost.CreateClient(new WebApplicationFactoryClientOptions
                 { HandleCookies = false, BaseAddress = new Uri("https://localhost") });
             var concurrentLogin = await concurrencyClient.PostAsJsonAsync("/api/v1/auth/login",
@@ -310,6 +376,39 @@ public sealed class PostgresAuthFlowTests
                 new { resetToken, newPassword = "different-passphrase-456" })).StatusCode);
             client.DefaultRequestHeaders.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", oldAccess);
             Assert.Equal(HttpStatusCode.Unauthorized, (await client.GetAsync("/api/v1/me")).StatusCode);
+        });
+
+    private static async Task WithDatabaseAsync(Func<string, Task> test)
+    {
+        if (Environment.GetEnvironmentVariable("ORCHESTRA_RUN_POSTGRES_TESTS") != "true") return;
+        var source = Environment.GetEnvironmentVariable("ORCHESTRA_TEST_ADMIN_CONNECTION") ??
+            new ConfigurationBuilder().AddUserSecrets(typeof(Program).Assembly, optional: true)
+                .Build().GetConnectionString("OrchestraDb");
+        Assert.False(string.IsNullOrWhiteSpace(source),
+            "Set ORCHESTRA_TEST_ADMIN_CONNECTION or the API's OrchestraDb User Secret.");
+        var databaseName = "orchestra_auth_test_" + Guid.NewGuid().ToString("N")[..12];
+        var testBuilder = new NpgsqlConnectionStringBuilder(source) { Database = databaseName, Pooling = false };
+        await using var admin = new NpgsqlConnection(source);
+        await admin.OpenAsync();
+        var created = false;
+        try
+        {
+            await using (var create = new NpgsqlCommand($"CREATE DATABASE \"{databaseName}\"", admin))
+                await create.ExecuteNonQueryAsync();
+            created = true;
+            await using (var database = new NpgsqlConnection(testBuilder.ConnectionString))
+            {
+                await database.OpenAsync();
+                var baseline = FindSchemaFile();
+                var migrations = Path.GetDirectoryName(baseline)!;
+                foreach (var file in new[] { baseline, Path.Combine(migrations, "002_user_avatar.sql"),
+                    Path.Combine(migrations, "003_api_stored_procedures.sql") })
+                {
+                    await using var apply = new NpgsqlCommand(await File.ReadAllTextAsync(file), database);
+                    await apply.ExecuteNonQueryAsync();
+                }
+            }
+            await test(testBuilder.ConnectionString);
         }
         finally
         {

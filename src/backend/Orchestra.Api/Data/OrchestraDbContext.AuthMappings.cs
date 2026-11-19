@@ -5,6 +5,9 @@ namespace Orchestra.Api.Data;
 
 public partial class OrchestraDbContext
 {
+
+    #pragma warning disable CA1822 // EF Core generated partial-method signature must match.
+
     partial void OnModelCreatingPartial(ModelBuilder modelBuilder)
     {
         // Partial unique indexes limit privileged accounts, but ordinary users share USER.
@@ -15,4 +18,5 @@ public partial class OrchestraDbContext
             .OnDelete(DeleteBehavior.ClientSetNull)
             .HasConstraintName("app_user_role_code_fkey");
     }
+    #pragma warning restore CA1822
 }

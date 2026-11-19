@@ -17,6 +17,7 @@ using Orchestra.Api.Modules.Users.Service;
 using Orchestra.Api.Modules.Users.UseCases;
 using Orchestra.Api.Modules.Users.Interfaces;
 using Orchestra.Api.Modules.Domains;
+using Orchestra.Api.Modules.RoutingPolicies;
 
 var builder = WebApplication.CreateBuilder(args);
 builder.Services.AddSingleton(provider =>
@@ -38,6 +39,7 @@ builder.Services.AddScoped<AvatarService>();
 builder.Services.AddScoped<DepartmentsService>();
 builder.Services.AddScoped<UserPreferenceService>();
 builder.Services.AddScoped<DomainsService>();
+builder.Services.AddScoped<RoutingPoliciesService>();
 builder.Services.AddSingleton<CodeService>();
 builder.Services.AddSingleton<TokenService>();
 builder.Services.AddScoped<RevokeSessionUseCase>();
@@ -164,11 +166,10 @@ builder.Services.Configure<ApiBehaviorOptions>(options =>
     };
 });
 
-
 builder.Services.AddHealthChecks()
     .AddDbContextCheck<OrchestraDbContext>(
         name: "postgresql",
-        tags: new[] { "ready" });
+        tags: HealthCheckTags.Ready);
 
 var app = builder.Build();
 app.UseExceptionHandler(handler => handler.Run(async context =>
@@ -261,4 +262,7 @@ app.MapHealthChecks("/health/ready", new HealthCheckOptions
 
 app.Run();
 
-public partial class Program;
+internal static class HealthCheckTags
+{
+    internal static readonly string[] Ready = ["ready"];
+}

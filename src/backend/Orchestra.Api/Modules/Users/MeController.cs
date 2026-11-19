@@ -15,17 +15,11 @@ public sealed class MeController(AuthService auth, MeService me, AvatarService a
 {
     [HttpGet]
     public async Task<IActionResult> Get(CancellationToken ct)
-    {
-        var id = Guid.Parse(User.FindFirstValue(JwtRegisteredClaimNames.Sub)!);
-        return Ok(ToUserDto(await auth.CurrentUserAsync(id, ct)));
-    }
+        => Ok(await me.GetAsync(User.GetUserId(), ct));
 
     [HttpPatch]
     public async Task<IActionResult> Update(UpdateMeRequest request, CancellationToken ct)
-    {
-         var id = User.GetUserId();
-        return Ok(ToUserDto(await me.UpdateAsync(id, request, ct)));
-    }
+        => Ok(await me.UpdateAsync(User.GetUserId(), request, ct));
 
     [HttpGet("sessions")]
     public async Task<IActionResult> Sessions(CancellationToken ct)
@@ -148,16 +142,6 @@ public sealed class MeController(AuthService auth, MeService me, AvatarService a
         await avatars.DeleteAsync(id, ct);
         return NoContent();
     }
-
-    private static MeDto ToUserDto(Models.Entities.AppUser? user)
-    {
-        if (user is null)
-            throw new ApiException(401, "INVALID_SESSION", "Please sign in again.");
-        return new MeDto(user.UserId, user.Email, user.FirstName, user.LastName,
-            user.DisplayName, user.PhoneNumber, user.JobTitle, user.RoleCode, user.DepartmentId,
-            user.Status, user.MustChangePassword, user.CreatedAt, user.UpdatedAt);
-    }
-
 }
 
 public static class ClaimsPrincipalExtensions

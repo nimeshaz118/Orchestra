@@ -1,6 +1,6 @@
 # Authentication and department API
 
-The public API is served by ASP.NET Core under `/api/v1`. Start new local databases with [`001_initial_schema.sql`](../../infrastructure/database/migrations/001_initial_schema.sql). The database is the source of truth; after an approved SQL schema change, one developer re-scaffolds and commits the EF model. Do not use EF migrations for these tables.
+The public API is served by ASP.NET Core under `/api/v1`. Apply the [database setup scripts](../../infrastructure/database/README.md) before running the API. Existing databases need `003_api_stored_procedures.sql` for the updated read and password endpoints. The database is the source of truth; after an approved SQL schema change, one developer re-scaffolds and commits the EF model. Do not use EF migrations for these tables.
 
 ## Local configuration
 
@@ -82,7 +82,7 @@ For a disabled-account check, set the test account's database status to `INACTIV
 dotnet test tests/Orchestra.Api.Tests/Orchestra.Api.Tests.csproj
 ```
 
-The regular endpoint tests use an in-memory database and a fake email sender. An opt-in integration test creates a uniquely named PostgreSQL database, applies the approved SQL schema, checks both privileged roles, departments, verification, refresh rotation/reuse, and password reset, then drops that test database. The configured PostgreSQL account must have `CREATEDB` permission. Run it from the repository root with an admin connection string in the API's User Secrets or `ORCHESTRA_TEST_ADMIN_CONNECTION`:
+The regular endpoint tests use an in-memory database and a fake email sender. The opt-in integration tests create isolated PostgreSQL databases, apply the setup scripts, and exercise the stored procedure endpoints, privileged roles, verification, refresh rotation/reuse, and password reset. They drop the test databases afterward. The configured PostgreSQL account must have `CREATEDB` permission. Run them from the repository root with an admin connection string in the API's User Secrets or `ORCHESTRA_TEST_ADMIN_CONNECTION`:
 
 ```powershell
 $env:ORCHESTRA_RUN_POSTGRES_TESTS = "true"
@@ -126,7 +126,7 @@ Think of each request as **authenticate -> validate -> change state -> respond**
 - **Upload:** `MeController` reads a bounded multipart request. `AvatarValidator` accepts `.png`, `.jpg`, or `.jpeg`, the matching `image/png` or `image/jpeg` MIME type, at most **2 MiB (2,097,152 bytes)**, and dimensions **1-2048 pixels on each side**. Both sides are checked before allocating pixels. Signature validation and a complete first-frame decode reject renamed or corrupt files. Decoded pixels are re-encoded to a static PNG, stripping uploaded metadata and trailing content. SkiaSharp is the image decoder; its Linux native-assets package supports Linux deployment as well as the Windows development environment.
 - **Storage/delete:** `AvatarService` uses EF Core to save the actual PNG bytes in `ai_orchestration.app_user.avatar_data` (`bytea`). The authenticated user ID selects the user row. Upload replaces `avatar_data`; delete sets it to NULL without deleting the account. Database failures use the existing safe `500 INTERNAL_ERROR` handler.
 
-Apply `infrastructure/database/migrations/002_user_avatar.sql` once in pgAdmin against your application database before starting the updated API. Existing databases already have `001_initial_schema.sql`; new databases need both scripts in order. No EF migrations are used. Local avatar files are no longer read or written. Previously uploaded local files are not automatically imported: upload the image again after applying the SQL change. The endpoints and multipart `file` field remain the same.
+Follow the [database setup order](../../infrastructure/database/README.md): `002_user_avatar.sql` ensures the avatar column exists, and `003_api_stored_procedures.sql` installs the avatar read procedure. Local avatar files are no longer read or written. Previously uploaded local files are not automatically imported: upload the image again after applying the SQL change. The endpoints and multipart `file` field remain the same.
 
 To inspect saved avatars without dumping image bytes:
 

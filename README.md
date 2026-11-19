@@ -188,7 +188,7 @@ Add new API features under `Modules/`. Keep generated EF Core files in `Data/` a
 
 ### Local development
 
-PostgreSQL must be running with the [approved SQL schema](infrastructure/database/migrations/001_initial_schema.sql) applied. Configure the API's connection string and local secrets using the [authentication guide](docs/api/authentication.md).
+PostgreSQL must be running with the [database setup scripts](infrastructure/database/README.md) applied. Configure the API's connection string and local secrets using the [authentication guide](docs/api/authentication.md).
 
 From the repository root, start the API with:
 

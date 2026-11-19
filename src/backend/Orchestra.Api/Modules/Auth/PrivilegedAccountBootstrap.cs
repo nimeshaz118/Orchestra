@@ -21,8 +21,12 @@ public sealed class PrivilegedAccountBootstrap(IServiceProvider services,
             if (password.Length < 12) throw new InvalidOperationException("Bootstrap passwords must be at least 12 characters.");
             if (await db.AppUsers.AnyAsync(u => u.RoleCode == role && u.Status == "ACTIVE" && u.DeletedAt == null, ct))
                 continue;
+           
+            #pragma warning disable CA1862 // EF Core requires SQL-translatable comparison.
             if (await db.AppUsers.AnyAsync(u => u.Email.ToLower() == email, ct))
                 throw new InvalidOperationException($"The configured {key} bootstrap email is already registered.");
+            #pragma warning restore CA1862
+            
             var now = DateTime.UtcNow;
             var user = new AppUser
             {
