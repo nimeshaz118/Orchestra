@@ -11,13 +11,17 @@ using Orchestra.Api.Controllers.UserPreference;
 using Orchestra.Api.Data;
 using Orchestra.Api.Models.Entities;
 using Orchestra.Api.Modules.Auth;
+using Orchestra.Api.Modules.Catalog;
 using Orchestra.Api.Modules.Departments;
+using Orchestra.Api.Modules.FeatureFlags;
 using Orchestra.Api.Modules.Users;
 using Orchestra.Api.Modules.Users.Service;
 using Orchestra.Api.Modules.Users.UseCases;
 using Orchestra.Api.Modules.Users.Interfaces;
 using Orchestra.Api.Modules.Domains;
 using Orchestra.Api.Modules.RoutingPolicies;
+using Orchestra.Api.Modules.Providers;
+using Orchestra.Api.Modules.Models;
 
 var builder = WebApplication.CreateBuilder(args);
 builder.Services.AddSingleton(provider =>
@@ -37,13 +41,19 @@ builder.Services.AddScoped<AuthService>();
 builder.Services.AddScoped<MeService>();
 builder.Services.AddScoped<AvatarService>();
 builder.Services.AddScoped<DepartmentsService>();
+builder.Services.AddScoped<FeatureFlagsService>();
 builder.Services.AddScoped<UserPreferenceService>();
 builder.Services.AddScoped<DomainsService>();
 builder.Services.AddScoped<RoutingPoliciesService>();
+builder.Services.AddScoped<ModelsService>();
 builder.Services.AddSingleton<CodeService>();
 builder.Services.AddSingleton<TokenService>();
 builder.Services.AddScoped<RevokeSessionUseCase>();
 builder.Services.AddScoped<RevokeOtherSessionsUseCase>();
+builder.Services.AddScoped<ProvidersService>();
+builder.Services.AddScoped<CatalogTestsService>();
+builder.Services.AddHttpClient<AiDiagnosticsClient>(client => client.Timeout = Timeout.InfiniteTimeSpan)
+    .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler { AllowAutoRedirect = false, UseCookies = false });
 
 builder.Services.AddScoped<ISessionService, SessionService>();
 builder.Services.AddHttpClient<IEmailSender, ResendEmailSender>(client =>

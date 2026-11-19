@@ -196,7 +196,7 @@ From the repository root, start the API with:
 dotnet run --project src/backend/Orchestra.Api --launch-profile https
 ```
 
-The API listens on `https://localhost:7235`. From `src/frontend/`, run `npm ci` once and `npm run dev` to start React at `http://localhost:5173`. The Python service currently contains dependency setup but no runnable application entry point.
+The API listens on `https://localhost:7235`. From `src/frontend/`, run `npm ci` once and `npm run dev` to start React at `http://localhost:5173`. Follow the [catalog diagnostics setup](docs/api/catalog-tests.md#local-setup) to run the private Python service for Super Admin provider and model tests.
 
 ## 7. Backend implementation pattern
 
