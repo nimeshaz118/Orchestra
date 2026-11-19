@@ -61,6 +61,27 @@ Use HTTPS locally (`https://localhost:7235` in the launch profile). Refresh toke
 | `GET /me/sessions` | Bearer token | Own active sessions |
 | `GET, POST /admin/departments` | Admin or Super Admin | List/create departments |
 | `GET, POST /super-admin/departments` | Super Admin | Same department operations |
+| `GET, POST, PATCH /super-admin/platform-settings` | Super Admin | Read persisted settings, create a setting, or update an existing setting; sensitive values are redacted |
+
+`POST /super-admin/platform-settings` accepts a JSON object with `key`, `value`, optional `description`, and optional `isSensitive`. Keys are trimmed and limited to 120 characters. Values may be any non-null JSON value. A duplicate key returns `409`; create a different key instead. Sensitive values are stored but omitted from both POST and GET responses.
+
+```json
+{
+  "key": "limits.max-users",
+  "value": { "count": 25 },
+  "description": "Maximum users per organization",
+  "isSensitive": false
+}
+```
+
+`PATCH /super-admin/platform-settings` updates one existing setting identified by `key`; it does not create missing settings or change the key. Include any combination of `value`, `description`, and `isSensitive`; omitted properties remain unchanged. Set `description` to `null` to clear it. A supplied `value` must be non-null JSON. The response is redacted when the setting is sensitive.
+
+```json
+{
+  "key": "limits.max-users",
+  "value": { "count": 50 }
+}
+```
 
 The user creation endpoints never accept a role. The registered account is always `USER`. The initial Admin and Super Admin accounts are created only through bootstrap.
 
