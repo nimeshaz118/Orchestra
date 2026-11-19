@@ -363,7 +363,8 @@ public sealed class AuthService(
             var rows = await db.ReadProcedureAsync("CALL ai_orchestration.api_list_sessions($1, $2, 'api_rows')",
                 row => new SessionDto(row.GetGuid(0), row.GetDateTime(1), row.GetDateTime(2),
                     row.IsDBNull(3) ? null : row.GetDateTime(3), row.IsDBNull(4) ? null : row.GetString(4),
-                    row.GetBoolean(5)), ct, userId, currentHash);
+                    row.GetBoolean(5)),
+                    ct, userId, currentHash);
             return rows.Count > 0 ? rows : throw ExpiredSession();
         }
 
