@@ -5,6 +5,8 @@
 *.user
 *.local
 
+_tmp-test-unlocked/
+
 # Python
 .venv/
 venv/
@@ -24,6 +26,7 @@ npm-debug.log*
 bin/
 obj/
 App_Data/
+.artifacts/
 
 # Local database and container data
 *.sqlite
@@ -39,7 +42,8 @@ infrastructure/.volumes/
 Thumbs.db
 Desktop.ini
 
-
-#sonarqube for testing
+# SonarQube for testing
 .sonarqube/
+.scannerwork/
 docker-compose.sonarqube.yml
+/coverage.xml

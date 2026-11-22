@@ -13,6 +13,8 @@ public partial class PlatformSetting
 
     public bool IsSensitive { get; set; }
 
+    public bool IsApplied { get; set; }
+
     public DateTime CreatedAt { get; set; }
 
     public DateTime UpdatedAt { get; set; }

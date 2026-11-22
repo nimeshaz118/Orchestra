@@ -1040,6 +1040,9 @@ public partial class OrchestraDbContext : DbContext
                 .HasColumnName("created_at");
             entity.Property(e => e.Description).HasColumnName("description");
             entity.Property(e => e.IsSensitive).HasColumnName("is_sensitive");
+            entity.Property(e => e.IsApplied)
+                .HasDefaultValue(false)
+                .HasColumnName("is_applied");
             entity.Property(e => e.SettingValue)
                 .HasColumnType("jsonb")
                 .HasColumnName("setting_value");
