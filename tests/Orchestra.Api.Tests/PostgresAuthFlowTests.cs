@@ -9,9 +9,12 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Logging;
 using Npgsql;
+using Orchestra.Api.Common;
 using Orchestra.Api.Modules.Auth;
+using Orchestra.Api.Modules.Catalog;
 using Orchestra.Api.Modules.Departments;
 using Orchestra.Api.Modules.Domains;
+using Orchestra.Api.Modules.FeatureFlags;
 using Orchestra.Api.Modules.Users;
 using Xunit;
 
@@ -19,6 +22,131 @@ namespace Orchestra.Api.Tests;
 
 public sealed class PostgresAuthFlowTests
 {
+    [Fact]
+    [Trait("Category", "PostgreSQL")]
+    public Task Super_admin_can_test_providers_and_models_loaded_from_stored_procedures() => WithDatabaseAsync(async connection =>
+    {
+        var providerId = Guid.NewGuid();
+        var modelId = Guid.NewGuid();
+        await using (var db = new NpgsqlConnection(connection))
+        {
+            await db.OpenAsync();
+            await using var seed = new NpgsqlCommand("""
+                WITH provider AS (
+                    INSERT INTO ai_orchestration.ai_provider
+                        (provider_id, provider_name, base_url, credential_reference, status, timeout_seconds)
+                    VALUES ($1, 'NVIDIA', 'https://integrate.api.nvidia.com/v1', 'NVIDIA_API_KEY', 'INACTIVE', 30)
+                    RETURNING provider_id
+                )
+                INSERT INTO ai_orchestration.ai_model
+                    (model_id, provider_id, provider_model_key, display_name, model_type, status, quality_tier)
+                SELECT $2, provider_id, 'test/chat', 'Chat', 'CHAT', 'INACTIVE', 1 FROM provider;
+                """, db);
+            seed.Parameters.Add(new NpgsqlParameter { Value = providerId });
+            seed.Parameters.Add(new NpgsqlParameter { Value = modelId });
+            await seed.ExecuteNonQueryAsync();
+        }
+
+        using var diagnostics = new DiagnosticsHandler();
+        using var baseHost = new PostgresHost(connection);
+        using var host = baseHost.WithWebHostBuilder(builder => builder
+            .ConfigureAppConfiguration((_, config) => config.AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["AiService:BaseUrl"] = "https://ai-service.example.test",
+                ["AiService:ServiceToken"] = "test-service-token"
+            }))
+            .ConfigureServices(services => services.AddHttpClient<AiDiagnosticsClient>()
+                .ConfigurePrimaryHttpMessageHandler(() => diagnostics)));
+        using var client = host.CreateClient(new WebApplicationFactoryClientOptions { BaseAddress = new Uri("https://localhost") });
+
+        var providerPath = $"/api/v1/super-admin/providers/{providerId}/test";
+        var modelPath = $"/api/v1/super-admin/models/{modelId}/test";
+        foreach (var path in new[] { providerPath, modelPath })
+        {
+            using var anonymous = await client.PostAsync(path, null);
+            Assert.Equal(HttpStatusCode.Unauthorized, anonymous.StatusCode);
+        }
+
+        async Task SignInAsync(string email, string password)
+        {
+            client.DefaultRequestHeaders.Authorization = null;
+            using var login = await client.PostAsJsonAsync("/api/v1/auth/login", new { email, password });
+            login.EnsureSuccessStatusCode();
+            var session = (await login.Content.ReadFromJsonAsync<LoginResponse>())!;
+            client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", session.AccessToken);
+        }
+
+        async Task InitializePasswordAsync(string email, string initialPassword, string newPassword)
+        {
+            await SignInAsync(email, initialPassword);
+            using var change = await client.PostAsJsonAsync("/api/v1/auth/change-password",
+                new { currentPassword = initialPassword, newPassword });
+            change.EnsureSuccessStatusCode();
+            await SignInAsync(email, newPassword);
+        }
+
+        await InitializePasswordAsync("admin@example.test", "initial-admin-passphrase", "changed-admin-passphrase");
+        foreach (var path in new[] { providerPath, modelPath })
+        {
+            using var forbidden = await client.PostAsync(path, null);
+            Assert.Equal(HttpStatusCode.Forbidden, forbidden.StatusCode);
+        }
+
+        await InitializePasswordAsync("super@example.test", "initial-super-passphrase", "changed-super-passphrase");
+        foreach (var (resource, code) in new[] { ("providers", "PROVIDER_NOT_FOUND"), ("models", "MODEL_NOT_FOUND") })
+        {
+            using var missing = await client.PostAsync($"/api/v1/super-admin/{resource}/{Guid.NewGuid()}/test", null);
+            Assert.Equal(HttpStatusCode.NotFound, missing.StatusCode);
+            Assert.Contains(code, await missing.Content.ReadAsStringAsync());
+        }
+        Assert.Empty(diagnostics.Requests);
+
+        foreach (var path in new[] { providerPath, modelPath })
+        {
+            using var response = await client.PostAsync(path, null);
+            Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+            var result = (await response.Content.ReadFromJsonAsync<CatalogTestResult>())!;
+            Assert.True(result.Success);
+            Assert.True(result.LatencyMs >= 0);
+        }
+
+        Assert.Collection(diagnostics.Requests,
+            provider =>
+            {
+                Assert.Equal(JsonValueKind.Null, provider.GetProperty("modelKey").ValueKind);
+                Assert.Equal(JsonValueKind.Null, provider.GetProperty("modelType").ValueKind);
+            },
+            model =>
+            {
+                Assert.Equal("test/chat", model.GetProperty("modelKey").GetString());
+                Assert.Equal("CHAT", model.GetProperty("modelType").GetString());
+            });
+        Assert.All(diagnostics.Requests, request =>
+        {
+            Assert.Equal("https://integrate.api.nvidia.com/v1", request.GetProperty("baseUrl").GetString());
+            Assert.Equal("NVIDIA_API_KEY", request.GetProperty("credentialReference").GetString());
+            Assert.Equal(30, request.GetProperty("timeoutSeconds").GetInt32());
+        });
+
+        foreach (var (upstream, expected, code, retryable) in new[]
+        {
+            (HttpStatusCode.UnprocessableEntity, HttpStatusCode.UnprocessableEntity, "INVALID_TEST_CONFIGURATION", false),
+            (HttpStatusCode.BadGateway, HttpStatusCode.BadGateway, "CATALOG_TEST_FAILED", false),
+            (HttpStatusCode.ServiceUnavailable, HttpStatusCode.ServiceUnavailable, "PROVIDER_UNAVAILABLE", true),
+            (HttpStatusCode.GatewayTimeout, HttpStatusCode.GatewayTimeout, "CATALOG_TEST_TIMEOUT", true),
+            (HttpStatusCode.Unauthorized, HttpStatusCode.ServiceUnavailable, "AI_SERVICE_UNAVAILABLE", true)
+        })
+        {
+            diagnostics.Status = upstream;
+            using var response = await client.PostAsync(modelPath, null);
+            Assert.Equal(expected, response.StatusCode);
+            var error = (await response.Content.ReadFromJsonAsync<ApiError>())!;
+            Assert.Equal(code, error.Code);
+            Assert.Equal(retryable, error.Retryable);
+            Assert.DoesNotContain("private upstream details", error.Message);
+        }
+    });
+
     [Fact]
     [Trait("Category", "PostgreSQL")]
     public Task Stored_procedure_endpoints_preserve_scoping_and_session_revocation() => WithDatabaseAsync(async connection =>
@@ -184,6 +312,65 @@ public sealed class PostgresAuthFlowTests
         Assert.Equal(HttpStatusCode.Unauthorized, (await second.GetAsync("/api/v1/auth/session")).StatusCode);
         Assert.Equal(HttpStatusCode.Unauthorized, (await second.PostAsync("/api/v1/auth/refresh", null)).StatusCode);
         await SignInAsync(first, "another-super-passphrase");
+    });
+
+    [Fact]
+    [Trait("Category", "PostgreSQL")]
+    public Task Super_admin_can_list_only_non_sensitive_boolean_feature_flags() => WithDatabaseAsync(async connection =>
+    {
+        const string url = "/api/v1/super-admin/feature-flags";
+        using var host = new PostgresHost(connection);
+        using var client = host.CreateClient(new WebApplicationFactoryClientOptions { BaseAddress = new Uri("https://localhost") });
+
+        using var anonymous = await client.GetAsync(url);
+        Assert.Equal(HttpStatusCode.Unauthorized, anonymous.StatusCode);
+
+        async Task SignInAsync(string email, string password)
+        {
+            client.DefaultRequestHeaders.Authorization = null;
+            using var login = await client.PostAsJsonAsync("/api/v1/auth/login", new { email, password });
+            login.EnsureSuccessStatusCode();
+            var session = (await login.Content.ReadFromJsonAsync<LoginResponse>())!;
+            client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", session.AccessToken);
+        }
+
+        async Task SignInAfterPasswordChangeAsync(string email, string currentPassword, string newPassword)
+        {
+            await SignInAsync(email, currentPassword);
+            using var change = await client.PostAsJsonAsync("/api/v1/auth/change-password", new { currentPassword, newPassword });
+            change.EnsureSuccessStatusCode();
+            await SignInAsync(email, newPassword);
+        }
+
+        await SignInAfterPasswordChangeAsync("admin@example.test", "initial-admin-passphrase", "changed-admin-passphrase");
+        using var admin = await client.GetAsync(url);
+        Assert.Equal(HttpStatusCode.Forbidden, admin.StatusCode);
+
+        await SignInAfterPasswordChangeAsync("super@example.test", "initial-super-passphrase", "changed-super-passphrase");
+        Assert.Empty((await client.GetFromJsonAsync<List<FeatureFlagDto>>(url))!);
+
+        await using (var db = new NpgsqlConnection(connection))
+        {
+            await db.OpenAsync();
+            await using var seed = new NpgsqlCommand("""
+                INSERT INTO ai_orchestration.platform_setting (setting_key, setting_value, description, is_sensitive, updated_at)
+                VALUES ('feature_flag.zeta', 'false', NULL, FALSE, '2026-01-01 00:00:00+00'),
+                       ('feature_flag.alpha', 'true', 'Alpha feature', FALSE, '2026-01-01 00:00:00+00'),
+                       ('feature_flag.secret', 'true', 'Sensitive flag', TRUE, '2026-01-01 00:00:00+00'),
+                       ('feature_flag.invalid', '"true"', NULL, FALSE, '2026-01-01 00:00:00+00'),
+                       ('feature_flag.', 'true', NULL, FALSE, '2026-01-01 00:00:00+00'),
+                       ('featureXflag.unrelated', 'true', NULL, FALSE, '2026-01-01 00:00:00+00');
+                """, db);
+            await seed.ExecuteNonQueryAsync();
+        }
+
+        var flags = await client.GetFromJsonAsync<List<FeatureFlagDto>>(url);
+        var updatedAt = new DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+        Assert.Equal(new[]
+        {
+            new FeatureFlagDto("alpha", true, "Alpha feature", updatedAt),
+            new FeatureFlagDto("zeta", false, null, updatedAt)
+        }, flags);
     });
 
     [Fact]
@@ -482,7 +669,10 @@ public sealed class PostgresAuthFlowTests
                 var migrations = Path.GetDirectoryName(baseline)!;
                 foreach (var file in new[] { baseline, Path.Combine(migrations, "002_user_avatar.sql"),
                     Path.Combine(migrations, "003_api_stored_procedures.sql"),
+                    Path.Combine(migrations, "004_model_creation_procedure.sql"),
                     Path.Combine(migrations, "004_platform_setting_procedures.sql"),
+                    Path.Combine(migrations, "004_provider_read_procedures.sql"),
+                    Path.Combine(migrations, "004_super_admin_feature_flags.sql"),
                     Path.Combine(migrations, "005_platform_setting_drafts.sql"),
                     Path.Combine(migrations, "006_platform_setting_apply_flag.sql") })
                 {
@@ -514,6 +704,24 @@ public sealed class PostgresAuthFlowTests
     private sealed record ResetTokenResponse(string ResetToken);
     private sealed record PlatformSettingDto(
         string Key, JsonElement? Value, string? Description, bool IsSensitive, bool IsApplied);
+
+    private sealed class DiagnosticsHandler : HttpMessageHandler
+    {
+        internal List<JsonElement> Requests { get; } = [];
+        internal HttpStatusCode Status { get; set; } = HttpStatusCode.NoContent;
+
+        protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct)
+        {
+            Assert.Equal(HttpMethod.Post, request.Method);
+            Assert.Equal("https://ai-service.example.test/internal/v1/catalog/test", request.RequestUri!.AbsoluteUri);
+            Assert.Equal("Bearer test-service-token", request.Headers.Authorization?.ToString());
+            Requests.Add(await request.Content!.ReadFromJsonAsync<JsonElement>(ct));
+            return new HttpResponseMessage(Status)
+            {
+                Content = Status == HttpStatusCode.NoContent ? null : new StringContent("private upstream details")
+            };
+        }
+    }
 
     private sealed class PostgresHost(string connection) : WebApplicationFactory<Program>
     {

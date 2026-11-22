@@ -84,6 +84,7 @@ The current `pyproject.toml` defines these runtime dependencies:
 | `langchain-core` | Core LangChain abstractions and interfaces |
 | `langgraph` | Build stateful, multi-step AI workflows and agents |
 | `python-dotenv` | Load configuration from environment files |
+| `uvicorn` | Run the private FastAPI HTTP service |
 
 The version constraints are maintained in `pyproject.toml`. `uv.lock` records the resolved versions so team members can install a consistent environment.
 
@@ -104,3 +105,16 @@ You do not have to activate the virtual environment manually. Prefix Python comm
 ```bash
 uv run python your_script.py
 ```
+
+## 7. Running the private AI service
+
+Set `ORCHESTRA_AI_SERVICE_TOKEN` to the same shared secret configured as `AiService:ServiceToken` in the .NET API. Set `NVIDIA_API_KEY` to your provider key when testing hosted NVIDIA models.
+
+```powershell
+uv sync --locked
+uv run --locked uvicorn main:app --host 127.0.0.1 --port 8001
+```
+
+By default, diagnostics allow `https://integrate.api.nvidia.com/v1` with the `NVIDIA_API_KEY` credential reference. To configure other approved HTTPS endpoints, set `ORCHESTRA_PROVIDER_ENDPOINTS` to a JSON object that maps each full API base URL to its credential environment variable name or `null` for an endpoint that accepts unauthenticated requests. This setting replaces the default mapping. Keep the service on a private network when it runs on a separate host from the API.
+
+Run the diagnostics tests with `uv run --locked python -m unittest -v`.

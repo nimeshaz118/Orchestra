@@ -1,12 +1,12 @@
 using Microsoft.EntityFrameworkCore;
 using Orchestra.Api.Models.Entities;
+using Orchestra.Api.Modules.Users;
 
 namespace Orchestra.Api.Data;
 
 public partial class OrchestraDbContext
 {
-
-    #pragma warning disable CA1822 // EF Core generated partial-method signature must match.
+#pragma warning disable CA1822 // EF Core generated partial-method signature must match.
 
     partial void OnModelCreatingPartial(ModelBuilder modelBuilder)
     {
