@@ -13,4 +13,5 @@ dependencies = [
     "langchain-nvidia-ai-endpoints>=1.5.0",
     "langgraph>=1.2.20",
     "python-dotenv>=1.2.4",
+    "uvicorn>=0.54.0",
 ]

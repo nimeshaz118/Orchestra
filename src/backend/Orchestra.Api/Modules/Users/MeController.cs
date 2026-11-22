@@ -1,0 +1,151 @@
+using System.IdentityModel.Tokens.Jwt;
+using System.Security.Claims;
+using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.RateLimiting;
+using Orchestra.Api.Common;
+using Orchestra.Api.Modules.Auth;
+using Orchestra.Api.Modules.Users.Interfaces;
+
+namespace Orchestra.Api.Modules.Users;
+
+[ApiController, Authorize]
+[Route("api/v1/me")]
+public sealed class MeController(AuthService auth, MeService me, AvatarService avatars, ISessionService session) : ControllerBase
+{
+    [HttpGet]
+    public async Task<IActionResult> Get(CancellationToken ct)
+        => Ok(await me.GetAsync(User.GetUserId(), ct));
+
+    [HttpPatch]
+    public async Task<IActionResult> Update(UpdateMeRequest request, CancellationToken ct)
+        => Ok(await me.UpdateAsync(User.GetUserId(), request, ct));
+
+    [HttpGet("sessions")]
+    public async Task<IActionResult> Sessions(CancellationToken ct)
+    {
+        var id = User.GetUserId();
+        var refreshToken = Request.Cookies["orchestra_refresh"];
+        if (string.IsNullOrWhiteSpace(refreshToken))
+            throw new ApiException(401, "INVALID_SESSION", "The session has expired.");
+
+        return Ok(await auth.SessionsAsync(id, refreshToken, ct));
+    }
+
+
+    [HttpDelete("sessions/{sessionId:guid}")]
+    public async Task<IActionResult> RevokeSession(
+        Guid sessionId,
+        CancellationToken ct)
+    {
+        var userId = User.GetUserId();
+
+        await session.RevokeSessionAsync(
+            userId,
+            sessionId,
+            ct);
+
+        return Ok(new
+        {
+            message = "Session revoked successfully."
+        });
+    }
+
+    // Revoke all other sessions
+    [HttpDelete("sessions/others"), EnableRateLimiting("sessionRevoke")]
+    public async Task<IActionResult> RevokeOtherSessions(
+        CancellationToken ct)
+    {
+        var userId = User.GetUserId();
+
+        // Obtain the current refresh token from your existing
+        // refresh-token cookie/header mechanism.
+        var currentToken = Request.Cookies["orchestra_refresh"];
+
+        var count = await session.RevokeOtherSessionsAsync(
+            userId,
+            currentToken,
+            ct);
+
+        return Ok(new
+        {
+            message = "Other sessions revoked successfully.",
+            revokedCount = count
+        });
+    }
+
+    [HttpPost("password"), EnableRateLimiting("auth")]
+    public async Task<IActionResult> ChangePassword(ChangePasswordRequest request, CancellationToken ct)
+    {
+        var id = Guid.Parse(User.FindFirstValue(JwtRegisteredClaimNames.Sub)!);
+        await auth.ChangePasswordAsync(id, request.CurrentPassword, request.NewPassword, ct);
+        Response.Cookies.Delete("orchestra_refresh", new CookieOptions
+        {
+            HttpOnly = true,
+            Secure = true,
+            SameSite = SameSiteMode.None,
+            Path = "/api/v1"
+        });
+        return Ok(new { message = "Password changed successfully." });
+    }
+
+    [HttpPut("avatar")]
+    [RequestSizeLimit(AvatarValidator.MaxRequestBytes)]
+    [RequestFormLimits(MultipartBodyLengthLimit = AvatarValidator.MaxRequestBytes,
+        MemoryBufferThreshold = AvatarValidator.MaxRequestBytes)]
+    public async Task<IActionResult> UploadAvatar()
+    {
+        var ct = HttpContext.RequestAborted;
+        if (Request.ContentLength > AvatarValidator.MaxRequestBytes) throw AvatarValidator.TooLarge();
+        if (!Request.HasFormContentType || !Request.ContentType!.StartsWith("multipart/form-data", StringComparison.OrdinalIgnoreCase))
+            throw new ApiException(400, "INVALID_AVATAR", "Send a multipart form with one file named 'file'.");
+
+        // Bound chunked requests too, before the multipart parser buffers files.
+        var bytes = new byte[AvatarValidator.MaxRequestBytes + 1];
+        int length;
+        try { length = await Request.Body.ReadAtLeastAsync(bytes, bytes.Length, throwOnEndOfStream: false, ct); }
+        catch (BadHttpRequestException ex) when (ex.StatusCode == 413) { throw AvatarValidator.TooLarge(); }
+        if (length > AvatarValidator.MaxRequestBytes) throw AvatarValidator.TooLarge();
+
+        var originalBody = Request.Body;
+        using var body = new MemoryStream(bytes, 0, length);
+        try
+        {
+            Request.Body = body;
+            IFormCollection form;
+            try { form = await Request.ReadFormAsync(ct); }
+            catch (Exception ex) when (ex is InvalidDataException or IOException)
+            { throw new ApiException(400, "INVALID_AVATAR", "The multipart form is invalid or incomplete."); }
+            if (form.Files.Count != 1 || form.Files[0].Name != "file")
+                throw new ApiException(400, "INVALID_AVATAR", "Send exactly one file named 'file'.");
+
+            var id = Guid.Parse(User.FindFirstValue(JwtRegisteredClaimNames.Sub)!);
+            await avatars.SaveAsync(id, form.Files[0], ct);
+        }
+        finally { Request.Body = originalBody; }
+        return Ok(new { avatarUrl = "/api/v1/me/avatar" });
+    }
+
+    [HttpGet("avatar")]
+    public async Task<IActionResult> Avatar(CancellationToken ct)
+    {
+        var id = Guid.Parse(User.FindFirstValue(JwtRegisteredClaimNames.Sub)!);
+        Response.Headers.CacheControl = "no-store";
+        Response.Headers.XContentTypeOptions = "nosniff";
+        return File(await avatars.ReadAsync(id, ct), "image/png");
+    }
+
+    [HttpDelete("avatar")]
+    public async Task<IActionResult> DeleteAvatar(CancellationToken ct)
+    {
+        var id = Guid.Parse(User.FindFirstValue(JwtRegisteredClaimNames.Sub)!);
+        await avatars.DeleteAsync(id, ct);
+        return NoContent();
+    }
+}
+
+public static class ClaimsPrincipalExtensions
+{
+    public static Guid GetUserId(this ClaimsPrincipal user)
+        => Guid.Parse(user.FindFirstValue(JwtRegisteredClaimNames.Sub)!);
+}
