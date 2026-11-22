@@ -1,11 +1,11 @@
+using AutoMapper;
 using Microsoft.EntityFrameworkCore;
 using Orchestra.Api.Common;
 using Orchestra.Api.Data;
-using Orchestra.Api.Models.Entities;
 
 namespace Orchestra.Api.Modules.Users;
 
-public sealed class MeService(OrchestraDbContext db)
+public sealed class MeService(OrchestraDbContext db, IMapper mapper)
 {
     public async Task<MeDto> GetAsync(Guid userId, CancellationToken ct)
     {
@@ -22,7 +22,7 @@ public sealed class MeService(OrchestraDbContext db)
 
         var user = await db.AppUsers.AsNoTracking().SingleOrDefaultAsync(
             u => u.UserId == userId && u.DeletedAt == null && u.Status == "ACTIVE", ct);
-        return ToDto(user ?? throw InvalidSession());
+        return mapper.Map<MeDto>(user ?? throw InvalidSession());
     }
 
     public async Task<MeDto> UpdateAsync(Guid userId, UpdateMeRequest request, CancellationToken ct)
@@ -49,13 +49,8 @@ public sealed class MeService(OrchestraDbContext db)
         user.UpdatedAt = DateTime.UtcNow;
         user.UpdatedByUserId = userId;
         await db.SaveChangesAsync(ct);
-        return ToDto(user);
+        return mapper.Map<MeDto>(user);
     }
-
-    private static MeDto ToDto(AppUser user) =>
-        new(user.UserId, user.Email, user.FirstName, user.LastName, user.DisplayName, user.PhoneNumber,
-            user.JobTitle, user.RoleCode, user.DepartmentId, user.Status, user.MustChangePassword,
-            user.CreatedAt, user.UpdatedAt);
 
     private static ApiException InvalidSession() => new(401, "INVALID_SESSION", "Please sign in again.");
 

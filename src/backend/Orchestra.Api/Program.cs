@@ -35,6 +35,7 @@ builder.Services.AddSingleton(provider =>
 
 builder.Services.AddControllers();
 builder.Services.AddOpenApi();
+builder.Services.AddAutoMapper(cfg => cfg.AddProfile<ApiMappingProfile>());
 builder.Services.AddDbContext<OrchestraDbContext>(options =>
     options.UseNpgsql(builder.Configuration.GetConnectionString("OrchestraDb")));
 builder.Services.AddScoped<IPasswordHasher<AppUser>, PasswordHasher<AppUser>>();

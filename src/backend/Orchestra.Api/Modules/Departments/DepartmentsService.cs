@@ -1,3 +1,5 @@
+using AutoMapper;
+using AutoMapper.QueryableExtensions;
 using Microsoft.EntityFrameworkCore;
 using Npgsql;
 using Orchestra.Api.Common;
@@ -20,7 +22,7 @@ public sealed record UpdateDepartmentRequest
     public Dictionary<string, JsonElement>? AdditionalProperties { get; init; }
 }
 
-public sealed class DepartmentsService(OrchestraDbContext db)
+public sealed class DepartmentsService(OrchestraDbContext db, IMapper mapper)
 {
     public Task<List<DepartmentDto>> PublicListAsync(CancellationToken ct) => ListAsync(true, ct);
 
@@ -32,7 +34,7 @@ public sealed class DepartmentsService(OrchestraDbContext db)
                 ReadDepartment, ct, activeOnly)
             : db.Departments.AsNoTracking().Where(d => !activeOnly || d.Status == "ACTIVE")
                 .OrderBy(d => d.DepartmentName)
-                .Select(d => new DepartmentDto(d.DepartmentId, d.DepartmentName, d.Description, d.Status))
+                .ProjectTo<DepartmentDto>(mapper.ConfigurationProvider)
                 .ToListAsync(ct);
 
     public async Task<DepartmentDto> GetByIdAsync(Guid departmentId, CancellationToken ct)
@@ -47,7 +49,7 @@ public sealed class DepartmentsService(OrchestraDbContext db)
         else
         {
             department = await db.Departments.AsNoTracking().Where(d => d.DepartmentId == departmentId)
-                .Select(d => new DepartmentDto(d.DepartmentId, d.DepartmentName, d.Description, d.Status))
+                .ProjectTo<DepartmentDto>(mapper.ConfigurationProvider)
                 .SingleOrDefaultAsync(ct);
         }
 
@@ -85,14 +87,14 @@ public sealed class DepartmentsService(OrchestraDbContext db)
             ?? throw new ApiException(404, "DEPARTMENT_NOT_FOUND", "The department was not found.");
 
         if (department.Status == status)
-            return ToDto(department);
+            return mapper.Map<DepartmentDto>(department);
 
         department.Status = status;
         department.UpdatedAt = DateTime.UtcNow;
         department.UpdatedByUserId = actor;
         await db.SaveChangesAsync(ct);
 
-        return ToDto(department);
+        return mapper.Map<DepartmentDto>(department);
     }
 
     public async Task<DepartmentDto> UpdateAsync(
@@ -177,11 +179,8 @@ public sealed class DepartmentsService(OrchestraDbContext db)
             throw DuplicateName();
         }
 
-        return ToDto(department);
+        return mapper.Map<DepartmentDto>(department);
     }
-
-    private static DepartmentDto ToDto(Department department)
-        => new(department.DepartmentId, department.DepartmentName, department.Description, department.Status);
 
     private static ApiException DuplicateName()
         => new(
@@ -237,7 +236,6 @@ public sealed class DepartmentsService(OrchestraDbContext db)
         {
             throw DuplicateName();
         }
-        return new DepartmentDto(department.DepartmentId, department.DepartmentName,
-            department.Description, department.Status);
+        return mapper.Map<DepartmentDto>(department);
     }
 }

@@ -1,3 +1,5 @@
+using AutoMapper;
+using AutoMapper.QueryableExtensions;
 using Microsoft.EntityFrameworkCore;
 using Npgsql;
 using Orchestra.Api.Common;
@@ -8,7 +10,7 @@ using System.Text.Json;
 
 namespace Orchestra.Api.Modules.RoutingPolicies;
 
-public sealed class RoutingPoliciesService(OrchestraDbContext db)
+public sealed class RoutingPoliciesService(OrchestraDbContext db, IMapper mapper)
 {
     private static readonly string[] Categories = ["GENERAL_PURPOSE", "CODING"];
     private static readonly string[] ScopeTypes = ["GLOBAL", "DEPARTMENT"];
@@ -22,7 +24,7 @@ public sealed class RoutingPoliciesService(OrchestraDbContext db)
                 .AsNoTracking()
                 .OrderBy(p => p.Priority)
                 .ThenBy(p => p.PolicyName)
-                .Select(p => ToDto(p))
+                .ProjectTo<RoutingPolicyDto>(mapper.ConfigurationProvider)
                 .ToListAsync(ct);
 
     public async Task<List<RoutingPolicyDto>> ListByDepartmentAsync(
@@ -45,7 +47,7 @@ public sealed class RoutingPoliciesService(OrchestraDbContext db)
             .Where(p => p.DepartmentId == departmentId)
             .OrderBy(p => p.Priority)
             .ThenBy(p => p.PolicyName)
-            .Select(p => ToDto(p))
+            .ProjectTo<RoutingPolicyDto>(mapper.ConfigurationProvider)
             .ToListAsync(ct);
     }
 
@@ -66,7 +68,7 @@ public sealed class RoutingPoliciesService(OrchestraDbContext db)
         var policy = await db.Set<RoutingPolicy>()
             .AsNoTracking()
             .SingleOrDefaultAsync(p => p.PolicyId == policyId, ct);
-        return policy is null ? throw RoutingPolicyNotFound() : ToDto(policy);
+        return mapper.Map<RoutingPolicyDto>(policy ?? throw RoutingPolicyNotFound());
     }
 
     public async Task<RoutingPolicyDto> CreateAsync(
@@ -173,7 +175,7 @@ public sealed class RoutingPoliciesService(OrchestraDbContext db)
             OccurredAt = now
         });
         await db.SaveChangesAsync(ct);
-        return ToDto(policy);
+        return mapper.Map<RoutingPolicyDto>(policy);
     }
 
     private static RoutingPolicyDto ReadPolicy(NpgsqlDataReader row) =>
@@ -181,11 +183,6 @@ public sealed class RoutingPoliciesService(OrchestraDbContext db)
             row.GetGuid(3), row.GetString(4), row.GetString(5),
             row.IsDBNull(6) ? null : row.GetGuid(6), row.GetInt32(7), row.GetBoolean(8),
             row.GetGuid(9), row.GetFieldValue<DateTime>(10), row.GetFieldValue<DateTime>(11));
-
-    private static RoutingPolicyDto ToDto(RoutingPolicy policy) =>
-        new(policy.PolicyId, policy.PolicyName, policy.Description, policy.ModelId,
-            policy.TaskCategory, policy.ScopeType, policy.DepartmentId, policy.Priority,
-            policy.IsEnabled, policy.CreatedBy, policy.CreatedAt, policy.UpdatedAt);
 
     private static ApiException InvalidRequest(IReadOnlyDictionary<string, string[]> errors) =>
         new(400, "INVALID_ROUTING_POLICY", "One or more routing policy fields are invalid.", errors);
