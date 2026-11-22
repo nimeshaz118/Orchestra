@@ -31,6 +31,7 @@ public sealed class PlatformSettingsTests
         Assert.Equal(
             new[] { "alpha.secret", "alpha.setting", "zeta.setting" },
             settings.Select(setting => setting.Key));
+        Assert.True(settings.All(setting => setting.IsApplied));
         Assert.True(settings[0].IsSensitive);
         Assert.Null(settings[0].Value);
         Assert.Equal(JsonValueKind.Number, settings[1].Value?.ValueKind);
@@ -64,7 +65,7 @@ public sealed class PlatformSettingsTests
     }
 
     [Fact]
-    public async Task Super_admin_creates_settings_and_sensitive_values_are_redacted()
+    public async Task Create_saves_setting_immediately_as_unapplied_and_redacts_sensitive_values()
     {
         await using var host = new ApiHost();
         var client = await SuperAdminClientAsync(host);
@@ -78,18 +79,21 @@ public sealed class PlatformSettingsTests
         });
 
         Assert.Equal(HttpStatusCode.Created, response.StatusCode);
+        Assert.NotNull(response.Headers.Location);
         var created = await response.Content.ReadFromJsonAsync<PlatformSettingResponse>();
         Assert.Equal("limits.max-users", created?.Key);
-        Assert.False(created?.IsSensitive);
+        Assert.False(created?.IsApplied);
         Assert.Equal(25, created?.Value?.GetProperty("count").GetInt32());
 
         using (var scope = host.Services.CreateScope())
         {
             var db = scope.ServiceProvider.GetRequiredService<OrchestraDbContext>();
-            var saved = await db.PlatformSettings.SingleAsync(setting => setting.SettingKey == "limits.max-users");
+            var saved = await db.PlatformSettings.SingleAsync(
+                setting => setting.SettingKey == "limits.max-users");
             var actor = await db.AppUsers.SingleAsync(user => user.Email == "super@example.test");
             Assert.Equal("{\"count\":25}", saved.SettingValue);
             Assert.Equal(actor.UserId, saved.UpdatedByUserId);
+            Assert.False(saved.IsApplied);
         }
 
         var sensitiveResponse = await client.PostAsJsonAsync(Url, new
@@ -99,10 +103,10 @@ public sealed class PlatformSettingsTests
             description = "Sensitive integration value",
             isSensitive = true
         });
-
         Assert.Equal(HttpStatusCode.Created, sensitiveResponse.StatusCode);
         var sensitive = await sensitiveResponse.Content.ReadFromJsonAsync<PlatformSettingResponse>();
         Assert.True(sensitive?.IsSensitive);
+        Assert.False(sensitive?.IsApplied);
         Assert.Null(sensitive?.Value);
     }
 
@@ -143,21 +147,25 @@ public sealed class PlatformSettingsTests
     }
 
     [Fact]
-    public async Task Admin_cannot_create_platform_settings()
+    public async Task Admin_cannot_create_or_update_platform_settings()
     {
         await using var host = new ApiHost();
         await host.SeedUserAsync("admin@example.test", "ADMIN");
         var client = await host.LoginClientAsync("admin@example.test");
 
-        var response = await client.PostAsJsonAsync(Url,
+        var create = await client.PostAsJsonAsync(Url,
             new { key = "limits.max-users", value = 25, description = (string?)null, isSensitive = false });
+        Assert.Equal(HttpStatusCode.Forbidden, create.StatusCode);
+        Assert.Equal("FORBIDDEN", (await create.Content.ReadFromJsonAsync<ApiError>())?.Code);
 
-        Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
-        Assert.Equal("FORBIDDEN", (await response.Content.ReadFromJsonAsync<ApiError>())?.Code);
+        var update = await client.PatchAsJsonAsync(Url,
+            new { key = "limits.max-users", value = 50 });
+        Assert.Equal(HttpStatusCode.Forbidden, update.StatusCode);
+        Assert.Equal("FORBIDDEN", (await update.Content.ReadFromJsonAsync<ApiError>())?.Code);
     }
 
     [Fact]
-    public async Task Super_admin_updates_an_existing_setting_and_preserves_omitted_fields()
+    public async Task Patch_updates_setting_immediately_and_preserves_omitted_fields_and_apply_state()
     {
         await using var host = new ApiHost();
         await SeedSettingAsync(host, "limits.max-users", """{"count":25}""", isSensitive: false);
@@ -174,6 +182,7 @@ public sealed class PlatformSettingsTests
         Assert.Equal(50, updated?.Value?.GetProperty("count").GetInt32());
         Assert.Equal("Description for limits.max-users", updated?.Description);
         Assert.False(updated?.IsSensitive);
+        Assert.True(updated?.IsApplied);
 
         using var scope = host.Services.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<OrchestraDbContext>();
@@ -181,6 +190,7 @@ public sealed class PlatformSettingsTests
         var actor = await db.AppUsers.SingleAsync(user => user.Email == "super@example.test");
         Assert.Equal("{\"count\":50}", saved.SettingValue);
         Assert.Equal(actor.UserId, saved.UpdatedByUserId);
+        Assert.True(saved.IsApplied);
     }
 
     [Fact]
@@ -202,6 +212,7 @@ public sealed class PlatformSettingsTests
         Assert.Null(updated?.Description);
         Assert.True(updated?.IsSensitive);
         Assert.Null(updated?.Value);
+        Assert.True(updated?.IsApplied);
     }
 
     [Fact]
@@ -235,17 +246,55 @@ public sealed class PlatformSettingsTests
     }
 
     [Fact]
-    public async Task Admin_cannot_update_platform_settings()
+    public async Task Apply_and_revoke_toggle_one_setting_and_validate_key_and_action()
     {
         await using var host = new ApiHost();
-        await host.SeedUserAsync("admin@example.test", "ADMIN");
-        var client = await host.LoginClientAsync("admin@example.test");
+        var client = await SuperAdminClientAsync(host);
+        var createdResponse = await client.PostAsJsonAsync(Url,
+            new { key = "limits.max-users", value = 25, isSensitive = false });
+        var created = (await createdResponse.Content.ReadFromJsonAsync<PlatformSettingResponse>())!;
+        Assert.False(created.IsApplied);
 
-        var response = await client.PatchAsJsonAsync(Url,
-            new { key = "limits.max-users", value = 50 });
+        var missing = await client.PostAsJsonAsync($"{Url}/apply",
+            new { key = "missing.setting", action = "APPLY" });
+        Assert.Equal(HttpStatusCode.NotFound, missing.StatusCode);
+        Assert.Equal("PLATFORM_SETTING_NOT_FOUND",
+            (await missing.Content.ReadFromJsonAsync<ApiError>())?.Code);
 
-        Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
-        Assert.Equal("FORBIDDEN", (await response.Content.ReadFromJsonAsync<ApiError>())?.Code);
+        var missingKey = await client.PostAsJsonAsync($"{Url}/apply",
+            new { action = "APPLY" });
+        Assert.Equal(HttpStatusCode.UnprocessableEntity, missingKey.StatusCode);
+        Assert.Contains("key",
+            (await missingKey.Content.ReadFromJsonAsync<ApiError>())!.Errors!.Keys);
+
+        var invalidAction = await client.PostAsJsonAsync($"{Url}/apply",
+            new { key = created.Key, action = "ENABLE" });
+        Assert.Equal(HttpStatusCode.UnprocessableEntity, invalidAction.StatusCode);
+        Assert.Contains("action",
+            (await invalidAction.Content.ReadFromJsonAsync<ApiError>())!.Errors!.Keys);
+
+        var appliedResponse = await client.PostAsJsonAsync($"{Url}/apply",
+            new { key = created.Key, action = "APPLY" });
+        Assert.Equal(HttpStatusCode.OK, appliedResponse.StatusCode);
+        Assert.True((await appliedResponse.Content.ReadFromJsonAsync<PlatformSettingResponse>())!.IsApplied);
+
+        var revokedResponse = await client.PostAsJsonAsync($"{Url}/apply",
+            new { key = created.Key, action = "REVOKE" });
+        Assert.Equal(HttpStatusCode.OK, revokedResponse.StatusCode);
+        Assert.False((await revokedResponse.Content.ReadFromJsonAsync<PlatformSettingResponse>())!.IsApplied);
+    }
+
+    [Fact]
+    public async Task Draft_and_review_routes_are_removed()
+    {
+        await using var host = new ApiHost();
+        var client = await SuperAdminClientAsync(host);
+
+        Assert.Equal(HttpStatusCode.NotFound, (await client.GetAsync($"{Url}/drafts")).StatusCode);
+        Assert.Equal(HttpStatusCode.NotFound,
+            (await client.GetAsync($"{Url}/drafts/{Guid.NewGuid()}")).StatusCode);
+        Assert.Equal(HttpStatusCode.NotFound,
+            (await client.PostAsync($"{Url}/drafts/{Guid.NewGuid()}/review", null)).StatusCode);
     }
 
     private static async Task SeedSettingAsync(
@@ -259,6 +308,7 @@ public sealed class PlatformSettingsTests
             SettingValue = value,
             Description = $"Description for {key}",
             IsSensitive = isSensitive,
+            IsApplied = true,
             CreatedAt = DateTime.UtcNow,
             UpdatedAt = DateTime.UtcNow
         });
@@ -272,5 +322,5 @@ public sealed class PlatformSettingsTests
     }
 
     private sealed record PlatformSettingResponse(
-        string Key, JsonElement? Value, string? Description, bool IsSensitive);
+        string Key, JsonElement? Value, string? Description, bool IsSensitive, bool IsApplied);
 }

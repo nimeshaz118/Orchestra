@@ -1,6 +1,6 @@
 # Authentication and department API
 
-The public API is served by ASP.NET Core under `/api/v1`. Apply the [database setup scripts](../../infrastructure/database/README.md) before running the API. Existing databases need `003_api_stored_procedures.sql` for the updated read and password endpoints. The database is the source of truth; after an approved SQL schema change, one developer re-scaffolds and commits the EF model. Do not use EF migrations for these tables.
+The public API is served by ASP.NET Core under `/api/v1`. Apply the [database setup scripts](../../infrastructure/database/README.md) before running the API. Existing databases need `003_api_stored_procedures.sql` for the updated read and password endpoints, `004_platform_setting_procedures.sql` for platform settings, and `006_platform_setting_apply_flag.sql` for direct setting updates and per-setting apply/revoke. Migration 006 removes any superseded draft objects created by migration 005. The database is the source of truth; after an approved SQL schema change, one developer re-scaffolds and commits the EF model. Do not use EF migrations for these tables.
 
 ## Local configuration
 
@@ -61,9 +61,12 @@ Use HTTPS locally (`https://localhost:7235` in the launch profile). Refresh toke
 | `GET /me/sessions` | Bearer token | Own active sessions |
 | `GET, POST /admin/departments` | Admin or Super Admin | List/create departments |
 | `GET, POST /super-admin/departments` | Super Admin | Same department operations |
-| `GET, POST, PATCH /super-admin/platform-settings` | Super Admin | Read persisted settings, create a setting, or update an existing setting; sensitive values are redacted |
+| `GET, POST, PATCH /super-admin/platform-settings` | Super Admin | Read settings, create a setting, or update setting values and metadata |
+| `POST /super-admin/platform-settings/apply` | Super Admin | Apply or revoke one setting by key |
 
-`POST /super-admin/platform-settings` accepts a JSON object with `key`, `value`, optional `description`, and optional `isSensitive`. Keys are trimmed and limited to 120 characters. Values may be any non-null JSON value. A duplicate key returns `409`; create a different key instead. Sensitive values are stored but omitted from both POST and GET responses.
+`GET /super-admin/platform-settings` returns all settings, including unapplied and revoked settings. Each item includes `isApplied`; `value` is redacted as `null` when `isSensitive` is true. Existing rows remain applied after migration 006, while new rows default to unapplied.
+
+`POST /super-admin/platform-settings` creates the setting immediately with `isApplied: false`; it does not enable the setting. It accepts `key`, `value`, optional `description`, and optional `isSensitive`. Keys are trimmed and limited to 120 characters. Values may be any non-null JSON value. A duplicate key returns `409`. Sensitive values are stored but redacted in responses.
 
 ```json
 {
@@ -74,7 +77,7 @@ Use HTTPS locally (`https://localhost:7235` in the launch profile). Refresh toke
 }
 ```
 
-`PATCH /super-admin/platform-settings` updates one existing setting identified by `key`; it does not create missing settings or change the key. Include any combination of `value`, `description`, and `isSensitive`; omitted properties remain unchanged. Set `description` to `null` to clear it. A supplied `value` must be non-null JSON. The response is redacted when the setting is sensitive.
+`PATCH /super-admin/platform-settings` immediately updates one existing setting identified by `key`; it does not change `isApplied`. Include any combination of `value`, `description`, and `isSensitive`; omitted properties remain unchanged. Set `description` to `null` to clear it. A supplied `value` must be non-null JSON. The response is redacted when the setting is sensitive.
 
 ```json
 {
@@ -82,6 +85,17 @@ Use HTTPS locally (`https://localhost:7235` in the launch profile). Refresh toke
   "value": { "count": 50 }
 }
 ```
+
+Apply or revoke a setting individually with `POST /super-admin/platform-settings/apply`:
+
+```json
+{
+  "key": "limits.max-users",
+  "action": "APPLY"
+}
+```
+
+Use `"action": "REVOKE"` to set `isApplied` to `false`. A missing key returns `404`; an action other than `APPLY` or `REVOKE` returns `422`. Actions are case-insensitive. Repeating the same action is safe and leaves the setting in that state.
 
 The user creation endpoints never accept a role. The registered account is always `USER`. The initial Admin and Super Admin accounts are created only through bootstrap.
 

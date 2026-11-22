@@ -61,6 +61,85 @@ public sealed class PostgresAuthFlowTests
         await SignInAsync(first, "changed-super-passphrase");
         await SignInAsync(second, "changed-super-passphrase");
 
+        using (var createdSetting = await first.PostAsJsonAsync("/api/v1/super-admin/platform-settings",
+            new
+            {
+                key = "integration.maintenance-mode",
+                value = true,
+                description = "Enable maintenance mode",
+                isSensitive = false
+            }))
+        {
+            Assert.Equal(HttpStatusCode.Created, createdSetting.StatusCode);
+            var created = (await createdSetting.Content.ReadFromJsonAsync<PlatformSettingDto>())!;
+            Assert.Equal("integration.maintenance-mode", created.Key);
+            Assert.False(created.IsApplied);
+            Assert.True(created.Value!.Value.GetBoolean());
+
+            var effectiveBeforeApply = (await first.GetFromJsonAsync<List<PlatformSettingDto>>(
+                "/api/v1/super-admin/platform-settings"))!;
+            Assert.Contains(effectiveBeforeApply, setting =>
+                setting.Key == "integration.maintenance-mode" && !setting.IsApplied);
+
+            using var duplicateSetting = await first.PostAsJsonAsync(
+                "/api/v1/super-admin/platform-settings",
+                new { key = "integration.maintenance-mode", value = false, isSensitive = false });
+            Assert.Equal(HttpStatusCode.Conflict, duplicateSetting.StatusCode);
+
+            using var apply = await first.PostAsJsonAsync(
+                "/api/v1/super-admin/platform-settings/apply",
+                new { key = created.Key, action = "APPLY" });
+            Assert.Equal(HttpStatusCode.OK, apply.StatusCode);
+            Assert.True((await apply.Content.ReadFromJsonAsync<PlatformSettingDto>())!.IsApplied);
+        }
+
+        using (var duplicateSetting = await first.PostAsJsonAsync("/api/v1/super-admin/platform-settings",
+            new { key = "integration.maintenance-mode", value = false, isSensitive = false }))
+            Assert.Equal(HttpStatusCode.Conflict, duplicateSetting.StatusCode);
+
+        using (var updatedSetting = await first.PatchAsJsonAsync("/api/v1/super-admin/platform-settings",
+            new
+            {
+                key = "integration.maintenance-mode",
+                value = false,
+                description = (string?)null,
+                isSensitive = true
+            }))
+        {
+            Assert.Equal(HttpStatusCode.OK, updatedSetting.StatusCode);
+            var updated = (await updatedSetting.Content.ReadFromJsonAsync<PlatformSettingDto>())!;
+            Assert.True(updated.IsSensitive);
+            Assert.Null(updated.Value);
+            Assert.Null(updated.Description);
+            Assert.True(updated.IsApplied);
+        }
+
+        using (var missingSetting = await first.PatchAsJsonAsync("/api/v1/super-admin/platform-settings",
+            new { key = "integration.missing", value = true }))
+            Assert.Equal(HttpStatusCode.NotFound, missingSetting.StatusCode);
+
+        var platformSettings = (await first.GetFromJsonAsync<List<PlatformSettingDto>>(
+            "/api/v1/super-admin/platform-settings"))!;
+        Assert.Null(platformSettings.Single(setting =>
+            setting.Key == "integration.maintenance-mode").Value);
+
+        await using (var settingsDb = new NpgsqlConnection(connection))
+        {
+            await settingsDb.OpenAsync();
+            await using var saved = new NpgsqlCommand(
+                "SELECT setting_value::text, description, is_sensitive, updated_by_user_id, is_applied " +
+                "FROM ai_orchestration.platform_setting WHERE setting_key = $1",
+                settingsDb);
+            saved.Parameters.Add(new NpgsqlParameter { Value = "integration.maintenance-mode" });
+            await using var reader = await saved.ExecuteReaderAsync();
+            Assert.True(await reader.ReadAsync());
+            Assert.Equal("false", reader.GetString(0));
+            Assert.True(reader.IsDBNull(1));
+            Assert.True(reader.GetBoolean(2));
+            Assert.Equal(sessionUser.Id, reader.GetGuid(3));
+            Assert.True(reader.GetBoolean(4));
+        }
+
         var departments = (await first.GetFromJsonAsync<List<DepartmentDto>>("/api/v1/super-admin/departments"))!;
         Assert.Equal(new[] { "Accounting", "Biology", "Zoology" }, departments.Select(d => d.Name));
         var inactive = departments[0];
@@ -402,7 +481,10 @@ public sealed class PostgresAuthFlowTests
                 var baseline = FindSchemaFile();
                 var migrations = Path.GetDirectoryName(baseline)!;
                 foreach (var file in new[] { baseline, Path.Combine(migrations, "002_user_avatar.sql"),
-                    Path.Combine(migrations, "003_api_stored_procedures.sql") })
+                    Path.Combine(migrations, "003_api_stored_procedures.sql"),
+                    Path.Combine(migrations, "004_platform_setting_procedures.sql"),
+                    Path.Combine(migrations, "005_platform_setting_drafts.sql"),
+                    Path.Combine(migrations, "006_platform_setting_apply_flag.sql") })
                 {
                     await using var apply = new NpgsqlCommand(await File.ReadAllTextAsync(file), database);
                     await apply.ExecuteNonQueryAsync();
@@ -430,6 +512,8 @@ public sealed class PostgresAuthFlowTests
     }
 
     private sealed record ResetTokenResponse(string ResetToken);
+    private sealed record PlatformSettingDto(
+        string Key, JsonElement? Value, string? Description, bool IsSensitive, bool IsApplied);
 
     private sealed class PostgresHost(string connection) : WebApplicationFactory<Program>
     {

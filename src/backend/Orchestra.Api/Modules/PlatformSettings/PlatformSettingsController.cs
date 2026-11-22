@@ -11,20 +11,28 @@ namespace Orchestra.Api.Modules.PlatformSettings;
 public sealed class PlatformSettingsController(PlatformSettingsService settings) : ControllerBase
 {
     [HttpGet]
-    public async Task<ActionResult<List<EffectivePlatformSettingDto>>> Get(CancellationToken ct)
-        => Ok(await settings.GetEffectiveAsync(ct));
+    public async Task<ActionResult<List<PlatformSettingDto>>> Get(CancellationToken ct)
+        => Ok(await settings.GetAllAsync(ct));
+
+    [HttpPost("apply")]
+    public async Task<ActionResult<PlatformSettingDto>> SetApplied(
+        ApplyPlatformSettingRequest request, CancellationToken ct)
+    {
+        var actor = Guid.Parse(User.FindFirstValue(JwtRegisteredClaimNames.Sub)!);
+        return Ok(await settings.SetAppliedAsync(request, actor, ct));
+    }
 
     [HttpPost]
-    public async Task<ActionResult<EffectivePlatformSettingDto>> Create(
+    public async Task<ActionResult<PlatformSettingDto>> Create(
         CreatePlatformSettingRequest request, CancellationToken ct)
     {
         var actor = Guid.Parse(User.FindFirstValue(JwtRegisteredClaimNames.Sub)!);
-        var result = await settings.CreateAsync(request, actor, ct);
-        return StatusCode(StatusCodes.Status201Created, result);
+        var setting = await settings.CreateAsync(request, actor, ct);
+        return CreatedAtAction(nameof(Get), null, setting);
     }
 
     [HttpPatch]
-    public async Task<ActionResult<EffectivePlatformSettingDto>> Update(
+    public async Task<ActionResult<PlatformSettingDto>> Update(
         UpdatePlatformSettingRequest request, CancellationToken ct)
     {
         var actor = Guid.Parse(User.FindFirstValue(JwtRegisteredClaimNames.Sub)!);

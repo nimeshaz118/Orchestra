@@ -1,0 +1,52 @@
+@baseUrl = https://localhost:7235/api/v1/super-admin/platform-settings
+@token = YOUR_SUPER_ADMIN_ACCESS_TOKEN
+
+### List settings and their apply state
+GET {{baseUrl}}
+Authorization: Bearer {{token}}
+
+### Create an unapplied setting
+POST {{baseUrl}}
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{
+  "key": "limits.max-users",
+  "value": {
+    "count": 25
+  },
+  "description": "Maximum users per organization",
+  "isSensitive": false
+}
+
+### Update setting values without changing its apply state
+PATCH {{baseUrl}}
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{
+  "key": "limits.max-users",
+  "value": {
+    "count": 50
+  }
+}
+
+### Apply a setting
+POST {{baseUrl}}/apply
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{
+  "key": "limits.max-users",
+  "action": "APPLY"
+}
+
+### Revoke a setting
+POST {{baseUrl}}/apply
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{
+  "key": "limits.max-users",
+  "action": "REVOKE"
+}
