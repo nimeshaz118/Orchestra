@@ -12,6 +12,7 @@ namespace Orchestra.Api.Modules.RoutingPolicies;
 public sealed class RoutingPoliciesController(RoutingPoliciesService routingPolicies) : ControllerBase
 {
     [HttpGet]
+    [Authorize]
     public async Task<IActionResult> List(CancellationToken ct)
         => Ok(await routingPolicies.ListAsync(ct));
 
