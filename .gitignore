@@ -5,6 +5,8 @@
 *.user
 *.local
 
+_tmp-test-unlocked/
+
 # Python
 .venv/
 venv/
