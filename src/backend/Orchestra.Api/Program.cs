@@ -137,7 +137,7 @@ builder.Services.AddRateLimiter(options =>
     {
         context.HttpContext.Response.Headers.RetryAfter = "60";
         await context.HttpContext.Response.WriteAsJsonAsync(new ApiError("RATE_LIMITED",
-            "Too many requests. Try again later.", context.HttpContext.TraceIdentifier), ct);
+            "Too many requests. Try again later.", context.HttpContext.TraceIdentifier, Retryable: true), ct);
     };
     options.AddPolicy("auth", context => RateLimitPartition.GetFixedWindowLimiter(
         context.Connection.RemoteIpAddress?.ToString() ?? "unknown",
@@ -228,13 +228,8 @@ app.UseStatusCodePages(async statusCodeContext =>
         context.RequestAborted);
 });
 
-var hasHttpsAddress = app.Urls.Any(address =>
-    Uri.TryCreate(address, UriKind.Absolute, out var uri) &&
-    uri.Scheme.Equals(Uri.UriSchemeHttps, StringComparison.OrdinalIgnoreCase));
-if (!app.Environment.IsDevelopment() || hasHttpsAddress)
-{
-    app.UseHttpsRedirection();
-}
+// Resolve the HTTPS port when requests arrive, after the server has bound its addresses.
+app.UseHttpsRedirection();
 
 if (app.Environment.IsDevelopment())
 {
@@ -247,8 +242,10 @@ app.UseRateLimiter();
 app.UseAuthentication();
 app.Use(async (context, next) =>
 {
-    if (context.User.HasClaim("must_change_password", "true") &&
+    if (context.Request.Path.StartsWithSegments("/api/v1") &&
+        context.User.HasClaim("must_change_password", "true") &&
         !context.Request.Path.StartsWithSegments("/api/v1/auth/change-password") &&
+        !context.Request.Path.StartsWithSegments("/api/v1/me/password") &&
         !context.Request.Path.StartsWithSegments("/api/v1/auth/session") &&
         !context.Request.Path.StartsWithSegments("/api/v1/auth/logout-all") &&
         !context.Request.Path.StartsWithSegments("/api/v1/auth/logout"))
@@ -276,6 +273,8 @@ app.MapHealthChecks("/health/ready", new HealthCheckOptions
 });
 
 app.Run();
+
+public partial class Program { }
 
 internal static class HealthCheckTags
 {

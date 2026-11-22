@@ -1,6 +1,6 @@
 # Authentication and department API
 
-The public API is served by ASP.NET Core under `/api/v1`. Apply the [database setup scripts](../../infrastructure/database/README.md) before running the API. Existing databases need `003_api_stored_procedures.sql` for the updated read and password endpoints, `004_platform_setting_procedures.sql` for platform settings, and `006_platform_setting_apply_flag.sql` for direct setting updates and per-setting apply/revoke. Migration 006 removes any superseded draft objects created by migration 005. The database is the source of truth; after an approved SQL schema change, one developer re-scaffolds and commits the EF model. Do not use EF migrations for these tables.
+The public API is served by ASP.NET Core under `/api/v1`. Apply the [database setup scripts](../../infrastructure/database/README.md) before running the API. Existing databases need `003_api_stored_procedures.sql` for the updated read and password endpoints, `004_platform_setting_procedures.sql` for platform settings, and `005_platform_setting_apply_flag.sql` for direct setting updates and per-setting apply/revoke. The apply-flag migration also removes superseded draft objects. The database is the source of truth; after an approved SQL schema change, one developer re-scaffolds and commits the EF model. Do not use EF migrations for these tables.
 
 ## Local configuration
 
@@ -117,7 +117,7 @@ For a disabled-account check, set the test account's database status to `INACTIV
 dotnet test tests/Orchestra.Api.Tests/Orchestra.Api.Tests.csproj
 ```
 
-The regular endpoint tests use an in-memory database and a fake email sender. The opt-in integration tests create isolated PostgreSQL databases, apply the setup scripts, and exercise the stored procedure endpoints, privileged roles, verification, refresh rotation/reuse, and password reset. They drop the test databases afterward. The configured PostgreSQL account must have `CREATEDB` permission. Run them from the repository root with an admin connection string in the API's User Secrets or `ORCHESTRA_TEST_ADMIN_CONNECTION`:
+The regular endpoint tests use an in-memory database and a fake email sender. The PostgreSQL tests are reported as skipped unless explicitly enabled. When enabled, they create isolated PostgreSQL databases, apply the setup scripts, and exercise the stored procedure endpoints, privileged roles, verification, refresh rotation/reuse, and password reset. They drop the test databases afterward. The configured PostgreSQL account must have `CREATEDB` permission. Run them from the repository root with an admin connection string in the API's User Secrets or `ORCHESTRA_TEST_ADMIN_CONNECTION`:
 
 ```powershell
 $env:ORCHESTRA_RUN_POSTGRES_TESTS = "true"

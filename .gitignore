@@ -26,6 +26,7 @@ npm-debug.log*
 bin/
 obj/
 App_Data/
+.artifacts/
 
 # Local database and container data
 *.sqlite
@@ -41,6 +42,7 @@ infrastructure/.volumes/
 Thumbs.db
 Desktop.ini
 
-
-#sonarqube for testing
+# Local SonarQube scanner output (setup and credentials are under .tools/)
 .sonarqube/
+.scannerwork/
+/coverage.xml

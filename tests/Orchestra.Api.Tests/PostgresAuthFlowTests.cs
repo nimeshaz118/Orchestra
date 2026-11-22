@@ -22,7 +22,7 @@ namespace Orchestra.Api.Tests;
 
 public sealed class PostgresAuthFlowTests
 {
-    [Fact]
+    [PostgresFact]
     [Trait("Category", "PostgreSQL")]
     public Task Super_admin_can_test_providers_and_models_loaded_from_stored_procedures() => WithDatabaseAsync(async connection =>
     {
@@ -147,7 +147,7 @@ public sealed class PostgresAuthFlowTests
         }
     });
 
-    [Fact]
+    [PostgresFact]
     [Trait("Category", "PostgreSQL")]
     public Task Stored_procedure_endpoints_preserve_scoping_and_session_revocation() => WithDatabaseAsync(async connection =>
     {
@@ -314,7 +314,7 @@ public sealed class PostgresAuthFlowTests
         await SignInAsync(first, "another-super-passphrase");
     });
 
-    [Fact]
+    [PostgresFact]
     [Trait("Category", "PostgreSQL")]
     public Task Super_admin_can_list_only_non_sensitive_boolean_feature_flags() => WithDatabaseAsync(async connection =>
     {
@@ -373,7 +373,7 @@ public sealed class PostgresAuthFlowTests
         }, flags);
     });
 
-    [Fact]
+    [PostgresFact]
     [Trait("Category", "PostgreSQL")]
     public Task Verification_refresh_reuse_and_password_reset_are_single_use() => WithDatabaseAsync(async connection =>
         {
@@ -646,7 +646,6 @@ public sealed class PostgresAuthFlowTests
 
     private static async Task WithDatabaseAsync(Func<string, Task> test)
     {
-        if (Environment.GetEnvironmentVariable("ORCHESTRA_RUN_POSTGRES_TESTS") != "true") return;
         var source = Environment.GetEnvironmentVariable("ORCHESTRA_TEST_ADMIN_CONNECTION") ??
             new ConfigurationBuilder().AddUserSecrets(typeof(Program).Assembly, optional: true)
                 .Build().GetConnectionString("OrchestraDb");
@@ -673,8 +672,7 @@ public sealed class PostgresAuthFlowTests
                     Path.Combine(migrations, "004_platform_setting_procedures.sql"),
                     Path.Combine(migrations, "004_provider_read_procedures.sql"),
                     Path.Combine(migrations, "004_super_admin_feature_flags.sql"),
-                    Path.Combine(migrations, "005_platform_setting_drafts.sql"),
-                    Path.Combine(migrations, "006_platform_setting_apply_flag.sql") })
+                    Path.Combine(migrations, "005_platform_setting_apply_flag.sql") })
                 {
                     await using var apply = new NpgsqlCommand(await File.ReadAllTextAsync(file), database);
                     await apply.ExecuteNonQueryAsync();

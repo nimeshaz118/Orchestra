@@ -18,7 +18,7 @@ services:
       - ./infrastructure/database/migrations/004_platform_setting_procedures.sql:/docker-entrypoint-initdb.d/004_platform_setting_procedures.sql:ro
       - ./infrastructure/database/migrations/004_provider_read_procedures.sql:/docker-entrypoint-initdb.d/004_provider_read_procedures.sql:ro
       - ./infrastructure/database/migrations/004_super_admin_feature_flags.sql:/docker-entrypoint-initdb.d/004_super_admin_feature_flags.sql:ro
-      - ./infrastructure/database/migrations/006_platform_setting_apply_flag.sql:/docker-entrypoint-initdb.d/006_platform_setting_apply_flag.sql:ro
+      - ./infrastructure/database/migrations/005_platform_setting_apply_flag.sql:/docker-entrypoint-initdb.d/005_platform_setting_apply_flag.sql:ro
 
 volumes:
   postgres_data:
