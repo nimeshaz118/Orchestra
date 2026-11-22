@@ -14,11 +14,13 @@ using Orchestra.Api.Modules.Auth;
 using Orchestra.Api.Modules.Catalog;
 using Orchestra.Api.Modules.Departments;
 using Orchestra.Api.Modules.FeatureFlags;
+using Orchestra.Api.Modules.PlatformSettings;
 using Orchestra.Api.Modules.Users;
 using Orchestra.Api.Modules.Users.Service;
 using Orchestra.Api.Modules.Users.UseCases;
 using Orchestra.Api.Modules.Users.Interfaces;
 using Orchestra.Api.Modules.Domains;
+using Orchestra.Api.Modules.RoutingPolicies;
 using Orchestra.Api.Modules.Providers;
 using Orchestra.Api.Modules.Models;
 
@@ -33,6 +35,7 @@ builder.Services.AddSingleton(provider =>
 
 builder.Services.AddControllers();
 builder.Services.AddOpenApi();
+builder.Services.AddAutoMapper(cfg => cfg.AddProfile<ApiMappingProfile>());
 builder.Services.AddDbContext<OrchestraDbContext>(options =>
     options.UseNpgsql(builder.Configuration.GetConnectionString("OrchestraDb")));
 builder.Services.AddScoped<IPasswordHasher<AppUser>, PasswordHasher<AppUser>>();
@@ -40,9 +43,11 @@ builder.Services.AddScoped<AuthService>();
 builder.Services.AddScoped<MeService>();
 builder.Services.AddScoped<AvatarService>();
 builder.Services.AddScoped<DepartmentsService>();
+builder.Services.AddScoped<PlatformSettingsService>();
 builder.Services.AddScoped<FeatureFlagsService>();
 builder.Services.AddScoped<UserPreferenceService>();
 builder.Services.AddScoped<DomainsService>();
+builder.Services.AddScoped<RoutingPoliciesService>();
 builder.Services.AddScoped<ModelsService>();
 builder.Services.AddSingleton<CodeService>();
 builder.Services.AddSingleton<TokenService>();
@@ -135,7 +140,7 @@ builder.Services.AddRateLimiter(options =>
     {
         context.HttpContext.Response.Headers.RetryAfter = "60";
         await context.HttpContext.Response.WriteAsJsonAsync(new ApiError("RATE_LIMITED",
-            "Too many requests. Try again later.", context.HttpContext.TraceIdentifier), ct);
+            "Too many requests. Try again later.", context.HttpContext.TraceIdentifier, Retryable: true), ct);
     };
     options.AddPolicy("auth", context => RateLimitPartition.GetFixedWindowLimiter(
         context.Connection.RemoteIpAddress?.ToString() ?? "unknown",
@@ -226,22 +231,24 @@ app.UseStatusCodePages(async statusCodeContext =>
         context.RequestAborted);
 });
 
-if (app.Environment.IsDevelopment()) app.MapOpenApi();
+// Resolve the HTTPS port when requests arrive, after the server has bound its addresses.
+app.UseHttpsRedirection();
 
 if (app.Environment.IsDevelopment())
 {
     app.MapOpenApi();
 }
 
-app.UseHttpsRedirection();
 app.UseRouting();
 app.UseCors("frontend");
 app.UseRateLimiter();
 app.UseAuthentication();
 app.Use(async (context, next) =>
 {
-    if (context.User.HasClaim("must_change_password", "true") &&
+    if (context.Request.Path.StartsWithSegments("/api/v1") &&
+        context.User.HasClaim("must_change_password", "true") &&
         !context.Request.Path.StartsWithSegments("/api/v1/auth/change-password") &&
+        !context.Request.Path.StartsWithSegments("/api/v1/me/password") &&
         !context.Request.Path.StartsWithSegments("/api/v1/auth/session") &&
         !context.Request.Path.StartsWithSegments("/api/v1/auth/logout-all") &&
         !context.Request.Path.StartsWithSegments("/api/v1/auth/logout"))
@@ -269,6 +276,8 @@ app.MapHealthChecks("/health/ready", new HealthCheckOptions
 });
 
 app.Run();
+
+public partial class Program { }
 
 internal static class HealthCheckTags
 {

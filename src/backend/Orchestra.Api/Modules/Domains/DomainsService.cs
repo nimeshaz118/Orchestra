@@ -1,4 +1,6 @@
 using System.Text.RegularExpressions;
+using AutoMapper;
+using AutoMapper.QueryableExtensions;
 using Microsoft.EntityFrameworkCore;
 using Npgsql;
 using Orchestra.Api.Common;
@@ -19,7 +21,7 @@ public sealed record CreateDomainRequest(string? DomainName);
 
 public sealed record CreateDomainResult(DomainDto Domain, bool Created);
 
-public sealed partial class DomainsService(OrchestraDbContext db)
+public sealed partial class DomainsService(OrchestraDbContext db, IMapper mapper)
 {
     // Regex implementation generated at compile time
     [GeneratedRegex(
@@ -34,7 +36,7 @@ public sealed partial class DomainsService(OrchestraDbContext db)
                 row => new DomainDto(row.GetGuid(0), row.GetString(1), row.GetBoolean(2),
                     row.GetDateTime(3), row.GetDateTime(4)), ct)
             : db.ApprovedEmailDomains.AsNoTracking().OrderBy(d => d.DomainName)
-                .Select(d => new DomainDto(d.DomainId, d.DomainName, d.IsActive, d.CreatedAt, d.UpdatedAt))
+                .ProjectTo<DomainDto>(mapper.ConfigurationProvider)
                 .ToListAsync(ct);
 
     public async Task<CreateDomainResult> CreateAsync(
@@ -76,7 +78,7 @@ public sealed partial class DomainsService(OrchestraDbContext db)
             existing.UpdatedByUserId = actorId;
 
             await db.SaveChangesAsync(ct);
-            return new CreateDomainResult(ToDto(existing), Created: false);
+            return new CreateDomainResult(mapper.Map<DomainDto>(existing), Created: false);
         }
 
         var now = DateTime.UtcNow;
@@ -109,7 +111,7 @@ public sealed partial class DomainsService(OrchestraDbContext db)
                 "This email domain already exists.");
         }
 
-        return new CreateDomainResult(ToDto(domain), Created: true);
+        return new CreateDomainResult(mapper.Map<DomainDto>(domain), Created: true);
     }
 
 
@@ -147,12 +149,4 @@ public sealed partial class DomainsService(OrchestraDbContext db)
         await db.SaveChangesAsync(ct);
     }
     */
-
-    private static DomainDto ToDto(ApprovedEmailDomain domain) =>
-        new(
-            domain.DomainId,
-            domain.DomainName,
-            domain.IsActive,
-            domain.CreatedAt,
-            domain.UpdatedAt);
 }

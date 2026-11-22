@@ -11,7 +11,7 @@ public sealed class TokenService(AuthSettings settings)
 {
     private readonly JwtSecurityTokenHandler _handler = new() { MapInboundClaims = false };
 
-    public LoginResponse AccessToken(AppUser user, Guid sessionId)
+    public (string AccessToken, DateTime ExpiresAt) AccessToken(AppUser user, Guid sessionId)
     {
         var expiry = DateTime.UtcNow.AddMinutes(settings.AccessTokenMinutes);
         var claims = new[]
@@ -22,9 +22,7 @@ public sealed class TokenService(AuthSettings settings)
             new Claim("sid", sessionId.ToString()),
             new Claim(JwtRegisteredClaimNames.Jti, Guid.NewGuid().ToString())
         };
-        return new LoginResponse(Create(claims, expiry), expiry,
-            new UserDto(user.UserId, user.Email, user.FirstName, user.LastName,
-                user.RoleCode, user.DepartmentId, user.Status, user.MustChangePassword));
+        return (Create(claims, expiry), expiry);
     }
 
     public string ResetToken(AppUser user, Guid challengeId)

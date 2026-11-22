@@ -1,6 +1,7 @@
 using System.ComponentModel.DataAnnotations;
 using System.IdentityModel.Tokens.Jwt;
 using System.Security.Claims;
+using AutoMapper;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.RateLimiting;
@@ -11,7 +12,8 @@ namespace Orchestra.Api.Modules.Auth;
 
 [ApiController]
 [Route("api/v1/auth")]
-public sealed class AuthController(AuthService auth, MeService me, IConfiguration configuration) : ControllerBase
+public sealed class AuthController(
+    AuthService auth, MeService me, IConfiguration configuration, IMapper mapper) : ControllerBase
 {
     private const string CookieName = "orchestra_refresh";
 
@@ -100,8 +102,7 @@ public sealed class AuthController(AuthService auth, MeService me, IConfiguratio
     public async Task<IActionResult> Session(CancellationToken ct)
     {
         var user = await me.GetAsync(User.GetUserId(), ct);
-        return Ok(new UserDto(user.Id, user.Email, user.FirstName, user.LastName,
-            user.Role, user.DepartmentId, user.Status, user.MustChangePassword));
+        return Ok(mapper.Map<UserDto>(user));
     }
 
     [HttpPost("forgot-password"), EnableRateLimiting("auth")]

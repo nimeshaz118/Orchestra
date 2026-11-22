@@ -1,5 +1,6 @@
 using System.Text.Json;
 using System.Text.RegularExpressions;
+using AutoMapper;
 using Microsoft.EntityFrameworkCore;
 using Npgsql;
 using Orchestra.Api.Common;
@@ -8,7 +9,7 @@ using Orchestra.Api.Models.Entities;
 
 namespace Orchestra.Api.Modules.Providers;
 
-public sealed class ProvidersService(OrchestraDbContext db)
+public sealed class ProvidersService(OrchestraDbContext db, IMapper mapper)
 {
     public Task<List<ProviderDto>> ListAsync(CancellationToken ct) =>
         db.Database.IsNpgsql()
@@ -21,7 +22,7 @@ public sealed class ProvidersService(OrchestraDbContext db)
     {
         var providers = await db.AiProviders.AsNoTracking()
             .OrderBy(p => p.ProviderName).ToListAsync(ct);
-        return providers.Select(ToDto).ToList();
+        return mapper.Map<List<ProviderDto>>(providers);
     }
 
     public async Task<ProviderDto> GetAsync(Guid id, CancellationToken ct)
@@ -38,7 +39,7 @@ public sealed class ProvidersService(OrchestraDbContext db)
         var provider = await db.AiProviders.AsNoTracking()
             .SingleOrDefaultAsync(p => p.ProviderId == id, ct);
 
-        return provider is null ? NotFound() : ToDto(provider);
+        return provider is null ? NotFound() : mapper.Map<ProviderDto>(provider);
     }
 
     public async Task<ProviderDto> CreateAsync(
@@ -64,7 +65,7 @@ public sealed class ProvidersService(OrchestraDbContext db)
         AddAudit(provider, actor, "PROVIDER_CREATED", null);
 
         await SaveAsync(ct);
-        return ToDto(provider);
+        return mapper.Map<ProviderDto>(provider);
     }
 
     public async Task<ProviderDto> UpdateAsync(
@@ -124,7 +125,7 @@ public sealed class ProvidersService(OrchestraDbContext db)
 
         await SaveAsync(ct);
         await db.Entry(provider).ReloadAsync(ct);
-        return ToDto(provider);
+        return mapper.Map<ProviderDto>(provider);
     }
 
     public Task<ProviderDto> EnableAsync(
@@ -142,7 +143,7 @@ public sealed class ProvidersService(OrchestraDbContext db)
 
         // Repeated enable/disable requests have the same outcome.
         if (provider.Status == status)
-            return ToDto(provider);
+            return mapper.Map<ProviderDto>(provider);
 
         var oldState = AuditState(provider);
         provider.Status = status;
@@ -155,7 +156,7 @@ public sealed class ProvidersService(OrchestraDbContext db)
 
         await db.SaveChangesAsync(ct);
         await db.Entry(provider).ReloadAsync(ct);
-        return ToDto(provider);
+        return mapper.Map<ProviderDto>(provider);
     }
 
     private async Task<AiProvider> FindTrackedAsync(Guid id, CancellationToken ct) =>
@@ -275,12 +276,6 @@ public sealed class ProvidersService(OrchestraDbContext db)
     private static ProviderDto NotFound() =>
         throw new ApiException(
             404, "PROVIDER_NOT_FOUND", "The provider was not found.");
-
-    private static ProviderDto ToDto(AiProvider p) =>
-        new(p.ProviderId, p.ProviderName, p.BaseUrl,
-            p.CredentialReference, p.Status, p.TimeoutSeconds,
-            JsonSerializer.Deserialize<JsonElement>(p.Configuration),
-            p.CreatedAt, p.UpdatedAt);
 
     // Column order must match both SELECT statements in migration 004.
     private static ProviderDto ReadProvider(NpgsqlDataReader row) =>

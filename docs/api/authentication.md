@@ -1,6 +1,6 @@
 # Authentication and department API
 
-The public API is served by ASP.NET Core under `/api/v1`. Apply the [database setup scripts](../../infrastructure/database/README.md) before running the API. Existing databases need `003_api_stored_procedures.sql` for the updated read and password endpoints. The database is the source of truth; after an approved SQL schema change, one developer re-scaffolds and commits the EF model. Do not use EF migrations for these tables.
+The public API is served by ASP.NET Core under `/api/v1`. Apply the [database setup scripts](../../infrastructure/database/README.md) before running the API. Existing databases need `003_api_stored_procedures.sql` for the updated read and password endpoints, `004_platform_setting_procedures.sql` for platform settings, and `005_platform_setting_apply_flag.sql` for direct setting updates and per-setting apply/revoke. The apply-flag migration also removes superseded draft objects. The database is the source of truth; after an approved SQL schema change, one developer re-scaffolds and commits the EF model. Do not use EF migrations for these tables.
 
 ## Local configuration
 
@@ -61,6 +61,41 @@ Use HTTPS locally (`https://localhost:7235` in the launch profile). Refresh toke
 | `GET /me/sessions` | Bearer token | Own active sessions |
 | `GET, POST /admin/departments` | Admin or Super Admin | List/create departments |
 | `GET, POST /super-admin/departments` | Super Admin | Same department operations |
+| `GET, POST, PATCH /super-admin/platform-settings` | Super Admin | Read settings, create a setting, or update setting values and metadata |
+| `POST /super-admin/platform-settings/apply` | Super Admin | Apply or revoke one setting by key |
+
+`GET /super-admin/platform-settings` returns all settings, including unapplied and revoked settings. Each item includes `isApplied`; `value` is redacted as `null` when `isSensitive` is true. Existing rows remain applied after migration 006, while new rows default to unapplied.
+
+`POST /super-admin/platform-settings` creates the setting immediately with `isApplied: false`; it does not enable the setting. It accepts `key`, `value`, optional `description`, and optional `isSensitive`. Keys are trimmed and limited to 120 characters. Values may be any non-null JSON value. A duplicate key returns `409`. Sensitive values are stored but redacted in responses.
+
+```json
+{
+  "key": "limits.max-users",
+  "value": { "count": 25 },
+  "description": "Maximum users per organization",
+  "isSensitive": false
+}
+```
+
+`PATCH /super-admin/platform-settings` immediately updates one existing setting identified by `key`; it does not change `isApplied`. Include any combination of `value`, `description`, and `isSensitive`; omitted properties remain unchanged. Set `description` to `null` to clear it. A supplied `value` must be non-null JSON. The response is redacted when the setting is sensitive.
+
+```json
+{
+  "key": "limits.max-users",
+  "value": { "count": 50 }
+}
+```
+
+Apply or revoke a setting individually with `POST /super-admin/platform-settings/apply`:
+
+```json
+{
+  "key": "limits.max-users",
+  "action": "APPLY"
+}
+```
+
+Use `"action": "REVOKE"` to set `isApplied` to `false`. A missing key returns `404`; an action other than `APPLY` or `REVOKE` returns `422`. Actions are case-insensitive. Repeating the same action is safe and leaves the setting in that state.
 
 The user creation endpoints never accept a role. The registered account is always `USER`. The initial Admin and Super Admin accounts are created only through bootstrap.
 
@@ -82,7 +117,7 @@ For a disabled-account check, set the test account's database status to `INACTIV
 dotnet test tests/Orchestra.Api.Tests/Orchestra.Api.Tests.csproj
 ```
 
-The regular endpoint tests use an in-memory database and a fake email sender. The opt-in integration tests create isolated PostgreSQL databases, apply the setup scripts, and exercise the stored procedure endpoints, privileged roles, verification, refresh rotation/reuse, and password reset. They drop the test databases afterward. The configured PostgreSQL account must have `CREATEDB` permission. Run them from the repository root with an admin connection string in the API's User Secrets or `ORCHESTRA_TEST_ADMIN_CONNECTION`:
+The regular endpoint tests use an in-memory database and a fake email sender. The PostgreSQL tests are reported as skipped unless explicitly enabled. When enabled, they create isolated PostgreSQL databases, apply the setup scripts, and exercise the stored procedure endpoints, privileged roles, verification, refresh rotation/reuse, and password reset. They drop the test databases afterward. The configured PostgreSQL account must have `CREATEDB` permission. Run them from the repository root with an admin connection string in the API's User Secrets or `ORCHESTRA_TEST_ADMIN_CONNECTION`:
 
 ```powershell
 $env:ORCHESTRA_RUN_POSTGRES_TESTS = "true"
