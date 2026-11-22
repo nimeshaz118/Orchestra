@@ -228,12 +228,19 @@ app.UseStatusCodePages(async statusCodeContext =>
         context.RequestAborted);
 });
 
+var hasHttpsAddress = app.Urls.Any(address =>
+    Uri.TryCreate(address, UriKind.Absolute, out var uri) &&
+    uri.Scheme.Equals(Uri.UriSchemeHttps, StringComparison.OrdinalIgnoreCase));
+if (!app.Environment.IsDevelopment() || hasHttpsAddress)
+{
+    app.UseHttpsRedirection();
+}
+
 if (app.Environment.IsDevelopment())
 {
     app.MapOpenApi();
 }
 
-app.UseHttpsRedirection();
 app.UseRouting();
 app.UseCors("frontend");
 app.UseRateLimiter();
