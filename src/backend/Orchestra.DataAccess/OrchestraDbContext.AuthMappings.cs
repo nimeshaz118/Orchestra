@@ -1,6 +1,5 @@
 using Microsoft.EntityFrameworkCore;
 using Orchestra.Api.Models.Entities;
-using Orchestra.Api.Modules.Users;
 
 namespace Orchestra.Api.Data;
 

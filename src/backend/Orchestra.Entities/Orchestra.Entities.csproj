@@ -1,0 +1,15 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    Orchestra.Entities: database entity classes only (no business logic, no packages).
+    Note: the C# namespaces were kept as Orchestra.Api.* (for example Orchestra.Api.Models.Entities)
+    so existing code and tests keep compiling. They can be renamed to Orchestra.Entities.* in a later phase.
+  -->
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+  </PropertyGroup>
+
+</Project>

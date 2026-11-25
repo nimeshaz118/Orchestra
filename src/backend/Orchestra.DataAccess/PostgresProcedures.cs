@@ -3,7 +3,7 @@ using Npgsql;
 
 namespace Orchestra.Api.Data;
 
-internal static class PostgresProcedures
+public static class PostgresProcedures
 {
     public static async Task<List<T>> ReadProcedureAsync<T>(
         this OrchestraDbContext db, string call, Func<NpgsqlDataReader, T> read,

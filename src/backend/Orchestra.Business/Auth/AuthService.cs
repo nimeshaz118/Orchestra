@@ -4,6 +4,8 @@ using System.Text.Json;
 using AutoMapper;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.Hosting;
 using Npgsql;
 using Orchestra.Api.Common;
 using Orchestra.Api.Data;
@@ -15,7 +17,7 @@ public sealed record IssuedSession(LoginResponse Response, string RefreshToken);
 
 public sealed class AuthService(
     OrchestraDbContext db, IPasswordHasher<AppUser> passwords, CodeService codes,
-    TokenService tokens, IEmailSender emailSender, IWebHostEnvironment environment,
+    TokenService tokens, IEmailSender emailSender, IHostEnvironment environment,
     IConfiguration configuration, AuthSettings settings, IMapper mapper)
 {
     private const string VerifyPurpose = "EMAIL_VERIFICATION";

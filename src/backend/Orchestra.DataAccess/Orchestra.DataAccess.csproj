@@ -1,0 +1,26 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    Orchestra.DataAccess: EF Core DbContext, PostgreSQL helpers and external data senders (email).
+    Depends on Orchestra.Entities only.
+    Note: the C# namespaces were kept as Orchestra.Api.* (for example Orchestra.Api.Data)
+    so existing code and tests keep compiling. They can be renamed to Orchestra.DataAccess.* in a later phase.
+  -->
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Extensions.Configuration.Abstractions" Version="10.0.14" />
+    <PackageReference Include="Microsoft.Extensions.Hosting.Abstractions" Version="10.0.14" />
+    <PackageReference Include="Npgsql.EntityFrameworkCore.PostgreSQL" Version="10.0.3" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Orchestra.Entities\Orchestra.Entities.csproj" />
+  </ItemGroup>
+
+</Project>
