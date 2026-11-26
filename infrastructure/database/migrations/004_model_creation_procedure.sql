@@ -34,7 +34,7 @@ BEGIN
         created_by_user_id, updated_by_user_id
     )
     VALUES (
-        p_provider_id, p_provider_model_key, p_display_name, p_model_type, 'ACTIVE',
+        p_provider_id, p_provider_model_key, p_display_name, p_model_type, 'INACTIVE',
         p_context_window_tokens, p_quality_tier, p_capabilities,
         p_actor_user_id, p_actor_user_id
     )
@@ -51,7 +51,7 @@ BEGIN
             'provider_model_key', p_provider_model_key,
             'display_name', p_display_name,
             'model_type', p_model_type,
-            'status', 'ACTIVE',
+            'status', 'INACTIVE',
             'context_window_tokens', p_context_window_tokens,
             'quality_tier', p_quality_tier,
             'capabilities', p_capabilities
