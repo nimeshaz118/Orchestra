@@ -13,7 +13,8 @@ from provider_models import ProviderChatModel, ProviderEmbeddings, ProviderEndpo
 
 app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
 PROVIDER_ENV_FILE = Path(__file__).with_name(".env")
-PROVIDER_KEY_REFERENCE = re.compile(r"[A-Z][A-Z0-9_]*_API_KEY(?:_[A-Z0-9]+)*")
+PROVIDER_KEY_PREFIX = re.compile(r"[A-Z][A-Z0-9_]*")
+PROVIDER_KEY_SUFFIX = re.compile(r"(?:[A-Z0-9]+_)*")
 RESERVED_KEY_PREFIXES = ("ORCHESTRA_", "LANGCHAIN_", "LANGSMITH_")
 
 
@@ -75,9 +76,15 @@ def registered_endpoint(request: CatalogTestRequest) -> ProviderEndpoint:
     return ProviderEndpoint(address, request.timeout_seconds, token)
 
 
+def is_provider_key_reference(reference: str) -> bool:
+    # Treat the end of the reference like an underscore so the marker matches whole segments.
+    prefix, marker, suffix = (reference + "_").rpartition("_API_KEY_")
+    return bool(marker and PROVIDER_KEY_PREFIX.fullmatch(prefix) and PROVIDER_KEY_SUFFIX.fullmatch(suffix))
+
+
 def provider_key(reference: str) -> str:
-    if (len(reference) > 150 or not PROVIDER_KEY_REFERENCE.fullmatch(reference)
-            or reference.startswith(RESERVED_KEY_PREFIXES)):
+    if (len(reference) > 150 or reference.startswith(RESERVED_KEY_PREFIXES)
+            or not is_provider_key_reference(reference)):
         raise HTTPException(422, "The credential reference must name a provider API key.")
 
     # Reload local provider keys when tested. Deployments can supply the same references via process env.

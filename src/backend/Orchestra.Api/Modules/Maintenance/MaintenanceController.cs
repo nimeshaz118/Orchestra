@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Diagnostics.CodeAnalysis;
 using System.IdentityModel.Tokens.Jwt;
 using System.Security.Claims;
 using Microsoft.AspNetCore.Authorization;
@@ -15,6 +16,8 @@ namespace Orchestra.Api.Modules.Maintenance;
 public sealed class MaintenanceController(MaintenanceService maintenance) : ControllerBase
 {
     [HttpPost("start")]
+    [SuppressMessage("SonarAnalyzer.CSharp", "S6932",
+        Justification = "The endpoint checks the number of header values and preserves commas within a single key.")]
     public async Task<ActionResult<MaintenanceStarted>> Start(
         StartMaintenanceRequest request, CancellationToken ct)
     {

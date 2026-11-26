@@ -91,9 +91,9 @@ public sealed class PlatformSettingsService(OrchestraDbContext db, IMapper mappe
 
         if (request.AdditionalProperties is { Count: > 0 } additionalProperties)
         {
-            var errors = additionalProperties.Keys.ToDictionary(
-                field => field,
-                _ => new[] { "This field cannot be changed." });
+            var errors = new Dictionary<string, string[]>(additionalProperties.Count);
+            foreach (var field in additionalProperties.Keys)
+                errors[field] = ["This field cannot be changed."];
             throw InvalidFields(
                 "One or more platform setting fields are not editable.",
                 errors);

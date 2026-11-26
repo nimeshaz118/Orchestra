@@ -10,6 +10,8 @@ namespace Orchestra.Api.Tests;
 
 public sealed class ProviderHealthEndpointsTests
 {
+    private static readonly string[] DegradedProviderErrors = ["AI_SERVICE_UNAVAILABLE", "CATALOG_TEST_FAILED"];
+
     [Fact]
     public async Task Health_uses_recent_conclusive_checks_for_the_requested_provider()
     {
@@ -41,7 +43,7 @@ public sealed class ProviderHealthEndpointsTests
         Assert.Equal(200.0, health.AverageLatencyMs24h);
         Assert.Equal(now.AddHours(-2), health.LastSuccessfulCheckAt);
         Assert.Equal(now.AddHours(-1), health.LastCheckedAt);
-        Assert.Equal(new[] { "AI_SERVICE_UNAVAILABLE", "CATALOG_TEST_FAILED" }, health.RecentSafeErrorCategories);
+        Assert.Equal(DegradedProviderErrors, health.RecentSafeErrorCategories);
 
         var stale = (await client.GetFromJsonAsync<ProviderHealthDto>(
             $"/api/v1/super-admin/providers/{other.ProviderId}/health"))!;
@@ -49,7 +51,7 @@ public sealed class ProviderHealthEndpointsTests
         Assert.Null(stale.AvailabilityPercent24h);
         Assert.Null(stale.AverageLatencyMs24h);
         Assert.Equal(now.AddHours(-25), stale.LastSuccessfulCheckAt);
-        Assert.Equal(new[] { "INVALID_TEST_CONFIGURATION" }, stale.RecentSafeErrorCategories);
+        Assert.Equal("INVALID_TEST_CONFIGURATION", Assert.Single(stale.RecentSafeErrorCategories));
     }
 
     private static AiProvider MakeProvider(string name, DateTime now) => new()

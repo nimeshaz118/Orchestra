@@ -176,10 +176,12 @@ builder.Services.Configure<ApiBehaviorOptions>(options =>
     };
 });
 
+const string readyHealthCheckTag = "ready";
+string[] readinessTags = [readyHealthCheckTag];
 builder.Services.AddHealthChecks()
     .AddDbContextCheck<OrchestraDbContext>(
         name: "postgresql",
-        tags: HealthCheckTags.Ready);
+        tags: readinessTags);
 
 var app = builder.Build();
 app.UseExceptionHandler(handler => handler.Run(async context =>
@@ -270,14 +272,7 @@ app.MapHealthChecks("/health/live", new HealthCheckOptions
 // Checks PostgreSQL connectivity through OrchestraDbContext.
 app.MapHealthChecks("/health/ready", new HealthCheckOptions
 {
-    Predicate = check => check.Tags.Contains("ready")
+    Predicate = check => check.Tags.Contains(readyHealthCheckTag)
 });
 
-app.Run();
-
-public partial class Program { }
-
-internal static class HealthCheckTags
-{
-    internal static readonly string[] Ready = ["ready"];
-}
+await app.RunAsync();

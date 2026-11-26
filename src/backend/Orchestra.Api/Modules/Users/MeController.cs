@@ -1,3 +1,4 @@
+using System.Diagnostics.CodeAnalysis;
 using System.IdentityModel.Tokens.Jwt;
 using System.Security.Claims;
 using Microsoft.AspNetCore.Authorization;
@@ -94,6 +95,8 @@ public sealed class MeController(AuthService auth, MeService me, AvatarService a
     [RequestSizeLimit(AvatarValidator.MaxRequestBytes)]
     [RequestFormLimits(MultipartBodyLengthLimit = AvatarValidator.MaxRequestBytes,
         MemoryBufferThreshold = AvatarValidator.MaxRequestBytes)]
+    [SuppressMessage("SonarAnalyzer.CSharp", "S6932",
+        Justification = "The endpoint limits chunked bodies before form parsing and validates every uploaded file.")]
     public async Task<IActionResult> UploadAvatar()
     {
         var ct = HttpContext.RequestAborted;

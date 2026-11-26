@@ -20,7 +20,8 @@ public sealed class MaintenanceRequests
 
     private async Task RemoveAsync(ActiveRequest request)
     {
-        await Admission.WaitAsync();
+        // Cleanup must remove the request even if maintenance has already cancelled it.
+        await Admission.WaitAsync(CancellationToken.None);
         try
         {
             _active.Remove(request);

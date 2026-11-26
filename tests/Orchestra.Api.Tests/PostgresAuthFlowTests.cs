@@ -24,9 +24,13 @@ namespace Orchestra.Api.Tests;
 
 public sealed class PostgresAuthFlowTests
 {
+    private static readonly string[] UnavailableProviderErrors = ["AI_SERVICE_UNAVAILABLE", "CATALOG_TEST_TIMEOUT"];
+    private static readonly string[] PublicDepartmentNames = ["Biology", "Zoology"];
+    private static readonly string[] ManagedDepartmentNames = ["Accounting", "Biology", "Zoology"];
+    private static readonly string[] ManagedDomains = ["a.example.test", "z.example.test"];
+
     [PostgresFact]
     [Trait("Category", "PostgreSQL")]
-
     public Task Super_admin_can_create_models_using_the_stored_procedure() => WithDatabaseAsync(async connection =>
     {
         var providerId = Guid.NewGuid();
@@ -102,7 +106,10 @@ public sealed class PostgresAuthFlowTests
         using var missingProvider = await client.PostAsJsonAsync(
             "/api/v1/super-admin/models", missingProviderRequest);
         Assert.Equal(HttpStatusCode.NotFound, missingProvider.StatusCode);
+    });
 
+    [PostgresFact]
+    [Trait("Category", "PostgreSQL")]
     public Task Maintenance_transitions_and_audits_are_shared_by_two_api_hosts() => WithDatabaseAsync(async connection =>
     {
         const string startPath = "/api/v1/super-admin/maintenance/start";
@@ -184,8 +191,8 @@ public sealed class PostgresAuthFlowTests
         Assert.Equal("MAINTENANCE_NOT_ACTIVE", (await endConflict.Content.ReadFromJsonAsync<ApiError>())?.Code);
         var result = (await ended.Content.ReadFromJsonAsync<MaintenanceEnded>())!;
         Assert.Equal(session.MaintenanceId, result.MaintenanceId);
-        Assert.Equal(new[] { "authenticated_api" }, result.RestoredServices);
-        Assert.Equal(new[] { "ai" }, result.UnavailableServices);
+        Assert.Equal("authenticated_api", Assert.Single(result.RestoredServices));
+        Assert.Equal("ai", Assert.Single(result.UnavailableServices));
         using var resumed = await second.GetAsync("/api/v1/me");
         Assert.Equal(HttpStatusCode.OK, resumed.StatusCode);
         Assert.False((await second.GetFromJsonAsync<SystemStatus>("/api/v1/system/status"))!.MaintenanceActive);
@@ -379,7 +386,7 @@ public sealed class PostgresAuthFlowTests
         Assert.Equal(healthy.AverageLatencyMs24h, unavailable.AverageLatencyMs24h);
         Assert.Equal(healthy.LastSuccessfulCheckAt, unavailable.LastSuccessfulCheckAt);
         Assert.True(unavailable.LastCheckedAt > unavailable.LastSuccessfulCheckAt);
-        Assert.Equal(new[] { "AI_SERVICE_UNAVAILABLE", "CATALOG_TEST_TIMEOUT" }, unavailable.RecentSafeErrorCategories);
+        Assert.Equal(UnavailableProviderErrors, unavailable.RecentSafeErrorCategories);
         Assert.Equal(probeCount, diagnostics.Requests.Count);
 
         const string providersPath = "/api/v1/super-admin/providers";
@@ -417,7 +424,7 @@ public sealed class PostgresAuthFlowTests
         using var second = host.CreateClient(new WebApplicationFactoryClientOptions { BaseAddress = new Uri("https://localhost") });
 
         var publicDepartments = (await first.GetFromJsonAsync<List<DepartmentDto>>("/api/v1/public/departments"))!;
-        Assert.Equal(new[] { "Biology", "Zoology" }, publicDepartments.Select(d => d.Name));
+        Assert.Equal(PublicDepartmentNames, publicDepartments.Select(d => d.Name));
 
         async Task SignInAsync(HttpClient client, string password)
         {
@@ -518,13 +525,13 @@ public sealed class PostgresAuthFlowTests
         }
 
         var departments = (await first.GetFromJsonAsync<List<DepartmentDto>>("/api/v1/super-admin/departments"))!;
-        Assert.Equal(new[] { "Accounting", "Biology", "Zoology" }, departments.Select(d => d.Name));
+        Assert.Equal(ManagedDepartmentNames, departments.Select(d => d.Name));
         var inactive = departments[0];
         Assert.Equal("INACTIVE", inactive.Status);
         Assert.Equal(inactive, await first.GetFromJsonAsync<DepartmentDto>($"/api/v1/super-admin/departments/{inactive.Id}"));
         Assert.Equal(HttpStatusCode.NotFound, (await first.GetAsync($"/api/v1/super-admin/departments/{Guid.NewGuid()}")).StatusCode);
         var domains = (await first.GetFromJsonAsync<List<DomainDto>>("/api/v1/admin/domains"))!;
-        Assert.Equal(new[] { "a.example.test", "z.example.test" }, domains.Select(d => d.DomainName));
+        Assert.Equal(ManagedDomains, domains.Select(d => d.DomainName));
         Assert.False(domains[0].IsActive);
 
         var profile = (await first.GetFromJsonAsync<MeDto>("/api/v1/me"))!;

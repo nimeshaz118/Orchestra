@@ -111,6 +111,7 @@ class CatalogTests(unittest.TestCase):
                           {"baseUrl": "https://user:password@provider.example.test/v1"},
                           {"credentialReference": "ORCHESTRA_AI_SERVICE_TOKEN"},
                           {"credentialReference": "LANGSMITH_API_KEY"},
+                          {"credentialReference": "CATALOG_API_KEY_"},
                           {"modelKey": "test/model"}):
             with self.subTest(overrides=overrides), self.assertRaises(HTTPException) as error:
                 run_catalog_test(self.request(**overrides))
@@ -122,11 +123,11 @@ class CatalogTests(unittest.TestCase):
         self.env_file.write_text("CATALOG_API_KEY=first-local-key\n", encoding="utf-8")
         path = "/internal/v1/catalog/test"
         headers = {"Authorization": "Bearer internal-token"}
-        second = self.request_body(credentialReference="CATALOG_API_KEY_2")
+        second = self.request_body(credentialReference="CATALOG_API_KEY_API_KEY2")
         with TestClient(app) as client:
             self.assertEqual(client.post(path, json=second, headers=headers).status_code, 422)
             self.env_file.write_text(
-                "CATALOG_API_KEY=first-local-key\nCATALOG_API_KEY_2=second-local-key\n", encoding="utf-8"
+                "CATALOG_API_KEY=first-local-key\nCATALOG_API_KEY_API_KEY2=second-local-key\n", encoding="utf-8"
             )
             self.assertEqual(client.post(path, json=second, headers=headers).status_code, 204)
             self.assertEqual(client.post(path, json=self.request_body(), headers=headers).status_code, 204)

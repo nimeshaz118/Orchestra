@@ -12,6 +12,9 @@ namespace Orchestra.Api.Tests;
 
 public sealed class MaintenanceEndpointsTests
 {
+    private static readonly string[] RestoredServices = ["authenticated_api", "ai"];
+    private static readonly string[] MaintenanceAuditActions = ["MAINTENANCE_STARTED", "MAINTENANCE_ENDED"];
+
     private const string Start = "/api/v1/super-admin/maintenance/start";
     private const string End = "/api/v1/super-admin/maintenance/end";
     private const string Status = "/api/v1/system/status";
@@ -87,7 +90,7 @@ public sealed class MaintenanceEndpointsTests
         var ended = (await end.Content.ReadFromJsonAsync<MaintenanceEnded>())!;
         Assert.Equal(started.MaintenanceId, ended.MaintenanceId);
         Assert.False(ended.Active);
-        Assert.Equal(new[] { "authenticated_api", "ai" }, ended.RestoredServices);
+        Assert.Equal(RestoredServices, ended.RestoredServices);
         Assert.Empty(ended.UnavailableServices);
         Assert.False((await anonymous.GetFromJsonAsync<SystemStatus>(Status))!.MaintenanceActive);
         using var profile = await person.GetAsync("/api/v1/me");
@@ -98,7 +101,7 @@ public sealed class MaintenanceEndpointsTests
         await using var scope = host.Services.CreateAsyncScope();
         var db = scope.ServiceProvider.GetRequiredService<OrchestraDbContext>();
         var audit = await db.AuditLogs.OrderBy(item => item.OccurredAt).ToListAsync();
-        Assert.Equal(new[] { "MAINTENANCE_STARTED", "MAINTENANCE_ENDED" }, audit.Select(item => item.Action));
+        Assert.Equal(MaintenanceAuditActions, audit.Select(item => item.Action));
         Assert.Equal(outcome.summary, audit[1].Reason);
         Assert.All(audit, item => Assert.Equal(started.MaintenanceId, item.TargetId));
     }
