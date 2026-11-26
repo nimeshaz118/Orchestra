@@ -24,6 +24,85 @@ public sealed class PostgresAuthFlowTests
 {
     [PostgresFact]
     [Trait("Category", "PostgreSQL")]
+    public Task Super_admin_can_create_models_using_the_stored_procedure() => WithDatabaseAsync(async connection =>
+    {
+        var providerId = Guid.NewGuid();
+        await using (var database = new NpgsqlConnection(connection))
+        {
+            await database.OpenAsync();
+            await using var seed = new NpgsqlCommand("""
+                INSERT INTO ai_orchestration.ai_provider
+                    (provider_id, provider_name, base_url, status, timeout_seconds)
+                VALUES ($1, 'Model creation test provider', 'https://provider.example.test', 'INACTIVE', 60);
+                """, database);
+            seed.Parameters.Add(new NpgsqlParameter { Value = providerId });
+            await seed.ExecuteNonQueryAsync();
+        }
+
+        using var host = new PostgresHost(connection);
+        using var client = host.CreateClient(new WebApplicationFactoryClientOptions
+        {
+            BaseAddress = new Uri("https://localhost")
+        });
+
+        async Task SignInAsync(string password)
+        {
+            client.DefaultRequestHeaders.Authorization = null;
+            using var login = await client.PostAsJsonAsync("/api/v1/auth/login",
+                new { email = "super@example.test", password });
+            login.EnsureSuccessStatusCode();
+            var session = (await login.Content.ReadFromJsonAsync<LoginResponse>())!;
+            client.DefaultRequestHeaders.Authorization =
+                new AuthenticationHeaderValue("Bearer", session.AccessToken);
+        }
+
+        const string initialPassword = "initial-super-passphrase";
+        const string changedPassword = "changed-super-passphrase";
+        await SignInAsync(initialPassword);
+        using (var change = await client.PostAsJsonAsync("/api/v1/auth/change-password",
+            new { currentPassword = initialPassword, newPassword = changedPassword }))
+            change.EnsureSuccessStatusCode();
+        await SignInAsync(changedPassword);
+
+        var request = new
+        {
+            providerId,
+            providerModelKey = $"test/model-{Guid.NewGuid():N}",
+            displayName = "Test model",
+            modelType = "CHAT",
+            contextWindowTokens = 4096,
+            qualityTier = 3,
+            capabilities = new { streaming = true }
+        };
+        using var created = await client.PostAsJsonAsync(
+            "/api/v1/super-admin/models", request);
+        Assert.Equal(HttpStatusCode.Created, created.StatusCode);
+        var model = (await created.Content.ReadFromJsonAsync<CreatedModelResponse>())!;
+        Assert.NotEqual(Guid.Empty, model.Id);
+        Assert.Equal("INACTIVE", model.Status);
+        Assert.Equal($"/api/v1/super-admin/models/{model.Id}", created.Headers.Location?.OriginalString);
+
+        using var duplicate = await client.PostAsJsonAsync(
+            "/api/v1/super-admin/models", request);
+        Assert.Equal(HttpStatusCode.Conflict, duplicate.StatusCode);
+
+        var missingProviderRequest = new
+        {
+            providerId = Guid.NewGuid(),
+            request.providerModelKey,
+            request.displayName,
+            request.modelType,
+            request.contextWindowTokens,
+            request.qualityTier,
+            request.capabilities
+        };
+        using var missingProvider = await client.PostAsJsonAsync(
+            "/api/v1/super-admin/models", missingProviderRequest);
+        Assert.Equal(HttpStatusCode.NotFound, missingProvider.StatusCode);
+    });
+
+    [PostgresFact]
+    [Trait("Category", "PostgreSQL")]
     public Task Super_admin_can_test_providers_and_models_loaded_from_stored_procedures() => WithDatabaseAsync(async connection =>
     {
         var providerId = Guid.NewGuid();
@@ -700,6 +779,7 @@ public sealed class PostgresAuthFlowTests
     }
 
     private sealed record ResetTokenResponse(string ResetToken);
+    private sealed record CreatedModelResponse(Guid Id, string Status);
     private sealed record PlatformSettingDto(
         string Key, JsonElement? Value, string? Description, bool IsSensitive, bool IsApplied);
 
