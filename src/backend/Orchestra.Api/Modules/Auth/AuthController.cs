@@ -6,6 +6,7 @@ using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.RateLimiting;
 using Orchestra.Api.Common;
+using Orchestra.Api.Modules.Maintenance;
 using Orchestra.Api.Modules.Users;
 
 namespace Orchestra.Api.Modules.Auth;
@@ -124,7 +125,7 @@ public sealed class AuthController(
         return Ok(new { message = "Password changed successfully." });
     }
 
-    [Authorize, HttpPost("change-password"), EnableRateLimiting("auth")]
+    [Authorize, HttpPost("change-password"), EnableRateLimiting("auth"), MaintenanceRecovery]
     public async Task<IActionResult> ChangePassword(ChangePasswordRequest request, CancellationToken ct)
     {
         var id = Guid.Parse(User.FindFirstValue(JwtRegisteredClaimNames.Sub)!);

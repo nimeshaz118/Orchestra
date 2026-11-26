@@ -3,13 +3,15 @@ using System.Security.Claims;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Orchestra.Api.Modules.Catalog;
+using Orchestra.Api.Modules.Maintenance;
 
 namespace Orchestra.Api.Modules.Providers;
 
 [ApiController]
 [Route("api/v1/super-admin/providers")]
 [Authorize(Roles = "SUPER_ADMIN")]
-public sealed class ProvidersController(ProvidersService providers, CatalogTestsService tests) : ControllerBase
+public sealed class ProvidersController(
+    ProvidersService providers, CatalogTestsService tests, ProviderHealthService health) : ControllerBase
 {
     [HttpGet]
     public async Task<IActionResult> List(CancellationToken ct) =>
@@ -19,7 +21,11 @@ public sealed class ProvidersController(ProvidersService providers, CatalogTests
     public async Task<IActionResult> Get(Guid providerId, CancellationToken ct) =>
         Ok(await providers.GetAsync(providerId, ct));
 
-    [HttpPost("{providerId:guid}/test")]
+    [HttpGet("{providerId:guid}/health")]
+    public async Task<ActionResult<ProviderHealthDto>> Health(Guid providerId, CancellationToken ct) =>
+        Ok(await health.GetAsync(providerId, ct));
+
+    [HttpPost("{providerId:guid}/test"), MaintenanceAiWork]
     public async Task<IActionResult> Test(Guid providerId, CancellationToken ct) =>
         Ok(await tests.TestProviderAsync(providerId, ct));
 

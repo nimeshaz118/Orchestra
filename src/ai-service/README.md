@@ -108,13 +108,23 @@ uv run python your_script.py
 
 ## 7. Running the private AI service
 
-Set `ORCHESTRA_AI_SERVICE_TOKEN` to the same shared secret configured as `AiService:ServiceToken` in the .NET API. Set `NVIDIA_API_KEY` to your provider key when testing hosted NVIDIA models.
+Put the service token and provider keys in `src/ai-service/.env` for local development. Match `ORCHESTRA_AI_SERVICE_TOKEN` to the .NET API's `AiService:ServiceToken`. For example:
+
+```dotenv
+ORCHESTRA_AI_SERVICE_TOKEN=replace_with_the_shared_service_token
+NVIDIA_API_KEY=replace_with_the_provider_key
+NVIDIA_API_KEY_2=replace_with_the_second_provider_key
+```
+
+Register the public HTTPS base URL and the credential reference through the Super Admin API. The saved provider record supplies both values. Use a provider key name such as `NVIDIA_API_KEY_2` or `OPENROUTER_API_KEY`. Use `null` for an unauthenticated provider. FastAPI reloads local provider keys from `.env` on each test and can also read provider keys injected into its process environment. Keep internal service credentials separate from provider key variables. Keep the service on a private network when it runs on a separate host from the API.
+
+Multiple provider records can use the same URL with separate keys. Each test uses the reference on the selected record.
 
 ```powershell
 uv sync --locked
-uv run --locked uvicorn main:app --host 127.0.0.1 --port 8001
+uv run --locked --env-file .env uvicorn main:app --host 127.0.0.1 --port 8000
 ```
 
-By default, diagnostics allow `https://integrate.api.nvidia.com/v1` with the `NVIDIA_API_KEY` credential reference. To configure other approved HTTPS endpoints, set `ORCHESTRA_PROVIDER_ENDPOINTS` to a JSON object that maps each full API base URL to its credential environment variable name or `null` for an endpoint that accepts unauthenticated requests. This setting replaces the default mapping. Keep the service on a private network when it runs on a separate host from the API.
+Use the port configured by `AiService:BaseUrl` in the .NET API. Port `8000` matches the repository's development settings.
 
 Run the diagnostics tests with `uv run --locked python -m unittest -v`.

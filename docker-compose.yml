@@ -20,6 +20,8 @@ services:
       - ./infrastructure/database/migrations/004_routing_policies.sql:/docker-entrypoint-initdb.d/004_routing_policies.sql:ro
       - ./infrastructure/database/migrations/004_super_admin_feature_flags.sql:/docker-entrypoint-initdb.d/004_super_admin_feature_flags.sql:ro
       - ./infrastructure/database/migrations/005_platform_setting_apply_flag.sql:/docker-entrypoint-initdb.d/005_platform_setting_apply_flag.sql:ro
+      - ./infrastructure/database/migrations/005_provide_health_&_Maintenanace.sql:/docker-entrypoint-initdb.d/005_provide_health_&_Maintenanace.sql:ro
+      - ./infrastructure/database/migrations/006_provider_diagnostic_adapters.sql:/docker-entrypoint-initdb.d/006_provider_diagnostic_adapters.sql:ro
 
 volumes:
   postgres_data:
