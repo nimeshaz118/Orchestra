@@ -23,6 +23,19 @@ public sealed class ModelsController(ModelsService models, CatalogTestsService t
     public async Task<IActionResult> Get(Guid modelId, CancellationToken ct)
         => Ok(await models.GetByIdAsync(modelId, ct));
 
+    [Authorize(Roles = "SUPER_ADMIN"), HttpPatch("api/v1/super-admin/models/{modelId:guid}")]
+    public async Task<IActionResult> Update(
+        Guid modelId, UpdateModelRequest request, CancellationToken ct)
+        => Ok(await models.UpdateAsync(modelId, request, User.GetUserId(), ct));
+
+    [Authorize(Roles = "SUPER_ADMIN"), HttpPost("api/v1/super-admin/models/{modelId:guid}/enable")]
+    public async Task<IActionResult> Enable(Guid modelId, CancellationToken ct)
+        => Ok(await models.EnableAsync(modelId, User.GetUserId(), ct));
+
+    [Authorize(Roles = "SUPER_ADMIN"), HttpPost("api/v1/super-admin/models/{modelId:guid}/disable")]
+    public async Task<IActionResult> Disable(Guid modelId, CancellationToken ct)
+        => Ok(await models.DisableAsync(modelId, User.GetUserId(), ct));
+
     [Authorize(Roles = "SUPER_ADMIN"), HttpPost("api/v1/super-admin/models/{modelId:guid}/test")]
     public async Task<IActionResult> Test(Guid modelId, CancellationToken ct)
         => Ok(await tests.TestModelAsync(modelId, ct));
