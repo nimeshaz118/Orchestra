@@ -1,6 +1,7 @@
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Orchestra.Api.Modules.Catalog;
+using Orchestra.Api.Modules.Maintenance;
 using Orchestra.Api.Modules.Users;
 
 namespace Orchestra.Api.Modules.Models;
@@ -37,6 +38,7 @@ public sealed class ModelsController(ModelsService models, CatalogTestsService t
         => Ok(await models.DisableAsync(modelId, User.GetUserId(), ct));
 
     [Authorize(Roles = "SUPER_ADMIN"), HttpPost("api/v1/super-admin/models/{modelId:guid}/test")]
+    [MaintenanceAiWork]
     public async Task<IActionResult> Test(Guid modelId, CancellationToken ct)
         => Ok(await tests.TestModelAsync(modelId, ct));
 }

@@ -10,6 +10,10 @@ Apply these scripts in order to a new PostgreSQL database before running the API
 6. [`004_provider_read_procedures.sql`](migrations/004_provider_read_procedures.sql) installs provider list/read procedures.
 7. [`004_super_admin_feature_flags.sql`](migrations/004_super_admin_feature_flags.sql) installs the Super Admin feature flag listing procedure.
 8. [`005_platform_setting_apply_flag.sql`](migrations/005_platform_setting_apply_flag.sql) adds the per-setting apply flag and installs the current platform settings procedures.
+9. [`005_provide_health_&_Maintenanace.sql`](migrations/005_provide_health_%26_Maintenanace.sql) installs the operations procedures using the existing settings, audit, and system log tables.
+10. [`006_provider_diagnostic_adapters.sql`](migrations/006_provider_diagnostic_adapters.sql) records adapters for existing providers in their JSON configuration.
+
+For an upgrade from the earlier dedicated-table implementation, stop the API before applying `005_provide_health_&_Maintenanace.sql`. The migration moves the latest maintenance state, retry records, and provider checks to the existing tables in one transaction, then drops the superseded tables. Maintenance start and end history is already in the audit log.
 
 For an existing database with the superseded draft table and procedures, run `005_platform_setting_apply_flag.sql` to remove them; any rows still in the draft table are discarded, while platform setting rows are preserved. Docker Compose runs the current setup scripts when it initializes an empty volume. For an existing database or Docker volume, apply missing scripts in order using pgAdmin or `psql` before starting the updated API. If you already ran the one-off SQL to remove drafts and add `is_applied`, still apply this migration: it safely repeats those schema steps and also updates the stored procedures. Existing settings remain applied; newly created settings default to unapplied.
 
