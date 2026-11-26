@@ -1,4 +1,5 @@
 using System.Text.Json;
+using AutoMapper;
 using Microsoft.EntityFrameworkCore;
 using Npgsql;
 using Orchestra.Api.Common;
@@ -37,7 +38,7 @@ public sealed record PlatformSettingDto(
     bool IsSensitive,
     bool IsApplied);
 
-public sealed class PlatformSettingsService(OrchestraDbContext db)
+public sealed class PlatformSettingsService(OrchestraDbContext db, IMapper mapper)
 {
     public async Task<PlatformSettingDto> CreateAsync(
         CreatePlatformSettingRequest request, Guid actor, CancellationToken ct)
@@ -79,7 +80,7 @@ public sealed class PlatformSettingsService(OrchestraDbContext db)
         };
         db.PlatformSettings.Add(setting);
         await db.SaveChangesAsync(ct);
-        return ToDto(setting);
+        return mapper.Map<PlatformSettingDto>(setting);
     }
 
     public async Task<PlatformSettingDto> UpdateAsync(
@@ -149,7 +150,7 @@ public sealed class PlatformSettingsService(OrchestraDbContext db)
         setting.UpdatedAt = DateTime.UtcNow;
         setting.UpdatedByUserId = actor;
         await db.SaveChangesAsync(ct);
-        return ToDto(setting);
+        return mapper.Map<PlatformSettingDto>(setting);
     }
 
     public async Task<PlatformSettingDto> SetAppliedAsync(
@@ -186,7 +187,7 @@ public sealed class PlatformSettingsService(OrchestraDbContext db)
         setting.UpdatedAt = DateTime.UtcNow;
         setting.UpdatedByUserId = actor;
         await db.SaveChangesAsync(ct);
-        return ToDto(setting);
+        return mapper.Map<PlatformSettingDto>(setting);
     }
 
     public async Task<List<PlatformSettingDto>> GetAllAsync(CancellationToken ct)
@@ -202,7 +203,7 @@ public sealed class PlatformSettingsService(OrchestraDbContext db)
         var settings = await db.PlatformSettings.AsNoTracking()
             .OrderBy(setting => setting.SettingKey)
             .ToListAsync(ct);
-        return settings.Select(ToDto).ToList();
+        return mapper.Map<List<PlatformSettingDto>>(settings);
     }
 
     private static string ValidateKey(string? value)
@@ -214,14 +215,6 @@ public sealed class PlatformSettingsService(OrchestraDbContext db)
             throw InvalidField("key", "Setting key cannot exceed 120 characters.");
         return key;
     }
-
-    private static PlatformSettingDto ToDto(PlatformSetting setting)
-        => new(
-            setting.SettingKey,
-            setting.IsSensitive ? null : ParseValue(setting.SettingValue),
-            setting.Description,
-            setting.IsSensitive,
-            setting.IsApplied);
 
     private static PlatformSettingDto ReadSetting(NpgsqlDataReader row)
     {

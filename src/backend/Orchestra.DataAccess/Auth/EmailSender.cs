@@ -1,5 +1,7 @@
 using System.Net.Http.Headers;
 using System.Net.Http.Json;
+using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.Hosting;
 
 namespace Orchestra.Api.Modules.Auth;
 
@@ -9,7 +11,7 @@ public interface IEmailSender
 }
 
 public sealed class ResendEmailSender(HttpClient client, IConfiguration configuration,
-    IWebHostEnvironment environment) : IEmailSender
+    IHostEnvironment environment) : IEmailSender
 {
     public async Task SendCodeAsync(string accountEmail, string purpose, string code,
         CancellationToken cancellationToken)

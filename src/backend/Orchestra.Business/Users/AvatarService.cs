@@ -7,7 +7,7 @@ namespace Orchestra.Api.Modules.Users;
 
 public sealed class AvatarService(OrchestraDbContext db)
 {
-    public async Task SaveAsync(Guid userId, IFormFile? file, CancellationToken ct)
+    public async Task SaveAsync(Guid userId, AvatarUpload? file, CancellationToken ct)
     {
         var user = await RequireActiveUserAsync(userId, ct);
         // Store the PNG directly in the user's bytea column.

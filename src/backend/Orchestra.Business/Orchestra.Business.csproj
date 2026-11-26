@@ -1,0 +1,29 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    Orchestra.Business: services, validators, DTO/contract records and mapping profiles.
+    Depends on Orchestra.DataAccess and Orchestra.Entities. Must not depend on ASP.NET Core MVC/HTTP types.
+    Note: the C# namespaces were kept as Orchestra.Api.* (for example Orchestra.Api.Modules.Auth)
+    so existing code and tests keep compiling. They can be renamed to Orchestra.Business.* in a later phase.
+  -->
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="AutoMapper" Version="17.0.0" />
+    <PackageReference Include="Microsoft.Extensions.Identity.Core" Version="10.0.14" />
+    <PackageReference Include="SkiaSharp" Version="4.153.1" />
+    <PackageReference Include="SkiaSharp.NativeAssets.Linux.NoDependencies" Version="4.153.1" />
+    <PackageReference Include="System.IdentityModel.Tokens.Jwt" Version="8.19.2" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Orchestra.DataAccess\Orchestra.DataAccess.csproj" />
+    <ProjectReference Include="..\Orchestra.Entities\Orchestra.Entities.csproj" />
+  </ItemGroup>
+
+</Project>

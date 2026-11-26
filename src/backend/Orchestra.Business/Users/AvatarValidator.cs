@@ -9,7 +9,7 @@ public static class AvatarValidator
     public const int MaxDimension = 2048;
     public const int MaxRequestBytes = MaxBytes + 64 * 1024; // Allow multipart headers.
 
-    public static async Task<byte[]> ValidateAsync(IFormFile? file, CancellationToken ct)
+    public static async Task<byte[]> ValidateAsync(AvatarUpload? file, CancellationToken ct)
     {
         if (file is null || file.Length == 0) throw InvalidFile();
         if (file.Length > MaxBytes) throw TooLarge();
@@ -25,7 +25,7 @@ public static class AvatarValidator
             throw new ApiException(415, "UNSUPPORTED_AVATAR_FORMAT", "The MIME type must match the file extension.");
 
         // Bound the actual stream too; do not trust the declared length alone.
-        await using var input = file.OpenReadStream();
+        var input = file.Content; // The caller opens and disposes the stream.
         using var buffer = new MemoryStream();
         var chunk = new byte[8192];
         int read;

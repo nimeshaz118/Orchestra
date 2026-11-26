@@ -1,4 +1,3 @@
-using System.IdentityModel.Tokens.Jwt;
 using System.Security.Claims;
 using System.Threading.RateLimiting;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
@@ -35,10 +34,12 @@ builder.Services.AddSingleton(provider =>
 
 builder.Services.AddControllers();
 builder.Services.AddOpenApi();
+builder.Services.AddAutoMapper(cfg => cfg.AddProfile<ApiMappingProfile>());
 builder.Services.AddDbContext<OrchestraDbContext>(options =>
     options.UseNpgsql(builder.Configuration.GetConnectionString("OrchestraDb")));
 builder.Services.AddScoped<IPasswordHasher<AppUser>, PasswordHasher<AppUser>>();
 builder.Services.AddScoped<AuthService>();
+builder.Services.AddScoped<SessionValidator>();
 builder.Services.AddScoped<MeService>();
 builder.Services.AddScoped<AvatarService>();
 builder.Services.AddScoped<DepartmentsService>();
@@ -91,36 +92,16 @@ builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
             },
             OnTokenValidated = async context =>
             {
-                var rawId = context.Principal?.FindFirstValue(JwtRegisteredClaimNames.Sub);
-                var rawStamp = context.Principal?.FindFirstValue("stamp");
-                if (!Guid.TryParse(rawId, out var id) || !Guid.TryParse(rawStamp, out var stamp) ||
-                    !Guid.TryParse(context.Principal?.FindFirstValue("sid"), out var sessionId))
+                var validator = context.HttpContext.RequestServices.GetRequiredService<SessionValidator>();
+                var result = await validator.ValidateAsync(context.Principal, context.HttpContext.RequestAborted);
+                if (!result.Succeeded)
                 {
-                    context.Fail("Invalid identity.");
+                    if (result.AccountUnavailable)
+                        context.HttpContext.Items["AccountUnavailable"] = true;
+                    context.Fail(result.FailureMessage!);
                     return;
                 }
-                var db = context.HttpContext.RequestServices.GetRequiredService<OrchestraDbContext>();
-                var user = await db.AppUsers.AsNoTracking().FirstOrDefaultAsync(u => u.UserId == id);
-                if (user is null || user.DeletedAt != null || user.SecurityStamp != stamp ||
-                    !context.Principal!.IsInRole(user.RoleCode))
-                {
-                    context.Fail("Invalid identity.");
-                    return;
-                }
-                if (!await db.RefreshTokens.AsNoTracking().AnyAsync(t => t.UserId == id &&
-                    t.FamilyId == sessionId && t.RevokedAt == null && t.ExpiresAt > DateTime.UtcNow,
-                    context.HttpContext.RequestAborted))
-                {
-                    context.Fail("Session is no longer active.");
-                    return;
-                }
-                if (user.Status != "ACTIVE" || user.EmailVerifiedAt == null)
-                {
-                    context.HttpContext.Items["AccountUnavailable"] = true;
-                    context.Fail("Account is unavailable.");
-                    return;
-                }
-                if (user.MustChangePassword)
+                if (result.MustChangePassword)
                     context.Principal!.AddIdentity(new ClaimsIdentity([new Claim("must_change_password", "true")]));
             }
         };

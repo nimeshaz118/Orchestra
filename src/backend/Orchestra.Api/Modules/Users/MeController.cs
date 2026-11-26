@@ -120,7 +120,9 @@ public sealed class MeController(AuthService auth, MeService me, AvatarService a
                 throw new ApiException(400, "INVALID_AVATAR", "Send exactly one file named 'file'.");
 
             var id = Guid.Parse(User.FindFirstValue(JwtRegisteredClaimNames.Sub)!);
-            await avatars.SaveAsync(id, form.Files[0], ct);
+            var file = form.Files[0];
+            await using var fileStream = file.OpenReadStream();
+            await avatars.SaveAsync(id, new AvatarUpload(file.FileName, file.ContentType, file.Length, fileStream), ct);
         }
         finally { Request.Body = originalBody; }
         return Ok(new { avatarUrl = "/api/v1/me/avatar" });

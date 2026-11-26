@@ -1,8 +1,11 @@
 using System.Security.Claims;
 using System.Data.Common;
 using System.Text.Json;
+using AutoMapper;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.Hosting;
 using Npgsql;
 using Orchestra.Api.Common;
 using Orchestra.Api.Data;
@@ -14,8 +17,8 @@ public sealed record IssuedSession(LoginResponse Response, string RefreshToken);
 
 public sealed class AuthService(
     OrchestraDbContext db, IPasswordHasher<AppUser> passwords, CodeService codes,
-    TokenService tokens, IEmailSender emailSender, IWebHostEnvironment environment,
-    IConfiguration configuration, AuthSettings settings)
+    TokenService tokens, IEmailSender emailSender, IHostEnvironment environment,
+    IConfiguration configuration, AuthSettings settings, IMapper mapper)
 {
     private const string VerifyPurpose = "EMAIL_VERIFICATION";
     private const string ResetPurpose = "PASSWORD_RESET";
@@ -134,7 +137,7 @@ public sealed class AuthService(
         user.LastLoginAt = now;
         var session = NewRefreshToken(user, Guid.NewGuid(), null, ip, userAgent);
         db.RefreshTokens.Add(session.Entity);
-        var response = tokens.AccessToken(user, session.Entity.FamilyId);
+        var response = CreateLoginResponse(user, session.Entity.FamilyId);
         await db.SaveChangesAsync(ct);
         return new IssuedSession(response, session.Plain);
     }
@@ -182,7 +185,7 @@ public sealed class AuthService(
         await db.SaveChangesAsync(ct);
         await db.RefreshTokens.Where(t => t.RefreshTokenId == old.RefreshTokenId)
             .ExecuteUpdateAsync(s => s.SetProperty(t => t.ReplacedByTokenId, next.Entity.RefreshTokenId), ct);
-        var response = tokens.AccessToken(user, old.FamilyId);
+        var response = CreateLoginResponse(user, old.FamilyId);
         await transaction.CommitAsync(ct);
         return new IssuedSession(response, next.Plain);
     }
@@ -377,8 +380,13 @@ public sealed class AuthService(
         var sessions = await db.RefreshTokens.AsNoTracking()
             .Where(t => t.UserId == userId && t.RevokedAt == null && t.ExpiresAt > DateTime.UtcNow)
             .OrderByDescending(t => t.CreatedAt).Take(50).ToListAsync(ct);
-        return sessions.Select(t => new SessionDto(t.RefreshTokenId, t.CreatedAt, t.ExpiresAt,
-            t.LastUsedAt, t.UserAgent, t.RefreshTokenId == currentSession.RefreshTokenId)).ToList();
+        return mapper.Map<List<SessionDto>>(sessions, opt => opt.State = currentSession.RefreshTokenId);
+    }
+
+    private LoginResponse CreateLoginResponse(AppUser user, Guid sessionId)
+    {
+        var (token, expiry) = tokens.AccessToken(user, sessionId);
+        return new LoginResponse(token, expiry, mapper.Map<UserDto>(user));
     }
 
     private static ApiException ExpiredSession() => new(401, "INVALID_SESSION", "The session has expired.");

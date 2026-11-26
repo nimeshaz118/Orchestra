@@ -13,7 +13,7 @@ Apply these scripts in order to a new PostgreSQL database before running the API
 
 For an existing database with the superseded draft table and procedures, run `005_platform_setting_apply_flag.sql` to remove them; any rows still in the draft table are discarded, while platform setting rows are preserved. Docker Compose runs the current setup scripts when it initializes an empty volume. For an existing database or Docker volume, apply missing scripts in order using pgAdmin or `psql` before starting the updated API. If you already ran the one-off SQL to remove drafts and add `is_applied`, still apply this migration: it safely repeats those schema steps and also updates the stored procedures. Existing settings remain applied; newly created settings default to unapplied.
 
-Add later schema changes as reviewed, numbered SQL files such as `002_change_name.sql`. Apply them in order to each developer's database, then re-scaffold the EF Core context and entities. Keep custom mappings in separate partial files, including `src/backend/Orchestra.Api/Data/OrchestraDbContext.AuthMappings.cs`.
+Add later schema changes as reviewed, numbered SQL files such as `002_change_name.sql`. Apply them in order to each developer's database, then re-scaffold the EF Core context and entities. Keep custom mappings in separate partial files, including `src/backend/Orchestra.DataAccess/OrchestraDbContext.AuthMappings.cs`.
 
 The removed `Database-initial-schema.sql` was an older design and must not be used for new databases.
 

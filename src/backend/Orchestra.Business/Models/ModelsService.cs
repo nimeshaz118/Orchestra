@@ -1,4 +1,5 @@
 using System.Text.Json;
+using AutoMapper;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Storage;
 using Npgsql;
@@ -9,7 +10,7 @@ using Orchestra.Api.Modules.Providers;
 
 namespace Orchestra.Api.Modules.Models;
 
-public sealed class ModelsService(OrchestraDbContext db, ProvidersService providers)
+public sealed class ModelsService(OrchestraDbContext db, ProvidersService providers, IMapper mapper)
 {
     public async Task<List<ModelDto>> ListAsync(CancellationToken ct)
     {
@@ -18,18 +19,7 @@ public sealed class ModelsService(OrchestraDbContext db, ProvidersService provid
             .ThenBy(m => m.ProviderModelKey)
             .ToListAsync(ct);
 
-        return models.Select(m => new ModelDto(
-            m.ModelId,
-            m.ProviderId,
-            m.ProviderModelKey,
-            m.DisplayName,
-            m.ModelType,
-            m.Status,
-            m.ContextWindowTokens,
-            m.QualityTier,
-            JsonDocument.Parse(m.Capabilities).RootElement.Clone(),
-            m.CreatedAt,
-            m.UpdatedAt)).ToList();
+        return mapper.Map<List<ModelDto>>(models);
     }
 
     public async Task<ModelDto> GetByIdAsync(Guid modelId, CancellationToken ct)
@@ -44,14 +34,9 @@ public sealed class ModelsService(OrchestraDbContext db, ProvidersService provid
         }
         else
         {
-            model = await db.AiModels.AsNoTracking()
-                .Where(m => m.ModelId == modelId)
-                .Select(m => new ModelDto(
-                    m.ModelId, m.ProviderId, m.ProviderModelKey, m.DisplayName,
-                    m.ModelType, m.Status, m.ContextWindowTokens, m.QualityTier,
-                    JsonDocument.Parse(m.Capabilities).RootElement.Clone(),
-                    m.CreatedAt, m.UpdatedAt))
-                .SingleOrDefaultAsync(ct);
+            var entity = await db.AiModels.AsNoTracking()
+                .SingleOrDefaultAsync(m => m.ModelId == modelId, ct);
+            model = entity is null ? null : mapper.Map<ModelDto>(entity);
         }
 
         return model ?? throw new ApiException(

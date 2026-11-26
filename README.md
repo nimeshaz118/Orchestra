@@ -5,8 +5,10 @@ The platform provides enterprise teams with one governed interface for AI chat a
 
 | Path | Purpose |
 | --- | --- |
-| `src/backend/Orchestra.Api/Modules/` | API features: Auth, Departments, and Users |
-| `src/backend/Orchestra.Api/Data/` and `Models/Entities/` | Database-first EF Core context and generated entities; keep custom partial mappings in `Data/` |
+| `src/backend/Orchestra.Api/` | ASP.NET Core host: controllers (`Modules/`), `Program.cs`, configuration |
+| `src/backend/Orchestra.Business/` | Services, validators, DTOs and mapping, organised by feature |
+| `src/backend/Orchestra.DataAccess/` | Database-first EF Core context, PostgreSQL helpers and email sender; keep custom partial mappings here |
+| `src/backend/Orchestra.Entities/` | Generated EF Core entity classes |
 | `src/frontend/` | React application |
 | `src/ai-service/` | Python AI service setup and locked dependencies |
 | `infrastructure/database/migrations/` | Reviewed SQL schema, starting with `001_initial_schema.sql` |
@@ -170,23 +172,29 @@ Orchestra/
   infrastructure/database/migrations/
     001_initial_schema.sql      Database-first PostgreSQL baseline
   src/
-    backend/Orchestra.Api/
-      Common/                   Shared API errors
-      Data/                     Scaffolded DbContext and custom partial mapping
-      Models/Entities/          Scaffolded EF Core entities
-      Modules/
-        Auth/                   Authentication and email
-        Departments/            Department endpoints
-        Users/                  Own profile and sessions
+    backend/
+      Orchestra.Api/            ASP.NET Core host (references Orchestra.Business)
+        Common/                 Shared API error response
+        Modules/<Feature>/      Controllers, e.g. Auth, Departments, Users
+        Program.cs              Startup, authentication and middleware
+      Orchestra.Business/       Services, validators, DTOs (references DataAccess and Entities)
+        Common/                 ApiException and AutoMapper profile
+        <Feature>/              e.g. Auth, Departments, Users, UserPreference
+      Orchestra.DataAccess/     Scaffolded DbContext, custom partial mapping, email sender (references Entities)
+      Orchestra.Entities/       Scaffolded EF Core entities (no dependencies)
     frontend/                   React application
     ai-service/                 Python dependency setup; service code is pending
   tests/Orchestra.Api.Tests/     API and PostgreSQL integration tests
   Orchestra.sln
 ```
 
-Add new API features under `Modules/`. Keep generated EF Core files in `Data/` and `Models/Entities/`; put custom behavior in separate partial files so re-scaffolding does not overwrite it.
+Dependencies only point downwards: Api -> Business -> DataAccess -> Entities. Add new endpoints as controllers under `Orchestra.Api/Modules/<Feature>/` and their services and DTOs under `Orchestra.Business/<Feature>/`. Keep generated EF Core files in `Orchestra.DataAccess/` (DbContext) and `Orchestra.Entities/` (entities); put custom behavior in separate partial files so re-scaffolding does not overwrite it.
+
+The C# namespaces still start with `Orchestra.Api.` in every project (for example `Orchestra.Api.Data`, `Orchestra.Api.Models.Entities`). This was kept on purpose so existing code and tests did not change; the namespaces can be renamed in a later phase.
 
 ### Local development
+
+New to the backend? Start with the [Backend Developer Guide](docs/backend-developer-guide.md). It explains each project, where to put new code, how to run the API and tests, and how to run the EF Core scaffold command.
 
 PostgreSQL must be running with the [database setup scripts](infrastructure/database/README.md) applied. Configure the API's connection string and local secrets using the [authentication guide](docs/api/authentication.md).
 
