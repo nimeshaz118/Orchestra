@@ -30,7 +30,45 @@ public sealed class RoutingPolicyTests
         var department = await client.GetFromJsonAsync<List<RoutingPolicyResponse>>(
             $"/api/v1/super-admin/routing-policies/department/{departmentId}");
         Assert.Single(department!);
-        Assert.Equal("CODING", department[0].TaskCategory);
+        Assert.Equal("CODING", department![0].TaskCategory);
+        Assert.Equal(HttpStatusCode.NotFound,
+            (await client.GetAsync(
+                $"/api/v1/super-admin/routing-policies/department/{Guid.NewGuid()}")).StatusCode);
+    }
+
+    [Fact]
+    public async Task Creating_an_existing_active_policy_definition_returns_conflict()
+    {
+        await using var host = new ApiHost();
+        var modelId = await host.SeedModelAsync("ACTIVE");
+        var departmentId = await host.SeedDepartmentAsync("Engineering", "ACTIVE");
+        var client = await SuperAdminClientAsync(host);
+        var first = await client.PostAsJsonAsync(
+            "/api/v1/super-admin/routing-policies",
+            Request(modelId, "CODING", "DEPARTMENT", departmentId));
+
+        var duplicate = await client.PostAsJsonAsync(
+            "/api/v1/super-admin/routing-policies",
+            new
+            {
+                policyName = "Renamed duplicate",
+                description = "Same model/category/scope definition",
+                modelId,
+                taskCategory = "CODING",
+                scopeType = "DEPARTMENT",
+                departmentId,
+                priority = 10,
+                isEnabled = true
+            });
+
+        Assert.Equal(HttpStatusCode.Created, first.StatusCode);
+        Assert.Equal(HttpStatusCode.Conflict, duplicate.StatusCode);
+        Assert.Equal("ROUTING_POLICY_ALREADY_EXISTS",
+            (await duplicate.Content.ReadFromJsonAsync<ApiErrorResponse>())?.Code);
+
+        using var scope = host.Services.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<OrchestraDbContext>();
+        Assert.Equal(1, await db.RoutingPolicies.CountAsync(p => p.IsActive));
     }
 
     [Fact]
@@ -53,6 +91,114 @@ public sealed class RoutingPolicyTests
         Assert.Equal(HttpStatusCode.NotFound, missing.StatusCode);
         Assert.Equal("ROUTING_POLICY_NOT_FOUND",
             (await missing.Content.ReadFromJsonAsync<ApiErrorResponse>())?.Code);
+    }
+
+    [Fact]
+    public async Task Super_admin_gets_clear_feedback_when_deleting_a_policy()
+    {
+        await using var host = new ApiHost();
+        var modelId = await host.SeedModelAsync("ACTIVE");
+        var departmentId = await host.SeedDepartmentAsync("Engineering", "ACTIVE");
+        var client = await SuperAdminClientAsync(host);
+        var created = await client.PostAsJsonAsync("/api/v1/super-admin/routing-policies",
+            Request(modelId, "CODING", "DEPARTMENT", departmentId));
+        var policy = await created.Content.ReadFromJsonAsync<RoutingPolicyResponse>();
+        var activeByDepartment = await client.GetFromJsonAsync<List<RoutingPolicyResponse>>(
+            $"/api/v1/super-admin/routing-policies/department/{departmentId}");
+        Assert.Contains(activeByDepartment!, item => item.PolicyId == policy!.PolicyId);
+
+        var firstDelete = await client.DeleteAsync(
+            $"/api/v1/super-admin/routing-policies/{policy!.PolicyId}");
+        var retryDelete = await client.DeleteAsync(
+            $"/api/v1/super-admin/routing-policies/{policy.PolicyId}");
+        var missingDelete = await client.DeleteAsync(
+            $"/api/v1/super-admin/routing-policies/{Guid.NewGuid()}");
+
+        Assert.Equal(HttpStatusCode.OK, firstDelete.StatusCode);
+        Assert.Equal("Routing policy deleted successfully.",
+            (await firstDelete.Content.ReadFromJsonAsync<DeleteSuccessResponse>())?.Message);
+        Assert.Equal(HttpStatusCode.Conflict, retryDelete.StatusCode);
+        var retryError = await retryDelete.Content.ReadFromJsonAsync<ApiErrorResponse>();
+        Assert.Equal("ROUTING_POLICY_ALREADY_DELETED", retryError?.Code);
+        Assert.Contains("already been deleted", retryError!.Message);
+        Assert.Equal(HttpStatusCode.NotFound, missingDelete.StatusCode);
+        Assert.Equal("ROUTING_POLICY_NOT_FOUND",
+            (await missingDelete.Content.ReadFromJsonAsync<ApiErrorResponse>())?.Code);
+        Assert.Equal(HttpStatusCode.NotFound,
+            (await client.GetAsync($"/api/v1/super-admin/routing-policies/{policy.PolicyId}")).StatusCode);
+        Assert.Empty((await client.GetFromJsonAsync<List<RoutingPolicyResponse>>(
+            "/api/v1/super-admin/routing-policies"))!);
+        Assert.Equal(HttpStatusCode.NotFound,
+            (await client.GetAsync(
+                $"/api/v1/super-admin/routing-policies/department/{departmentId}")).StatusCode);
+        var deletedByDepartment = await client.GetFromJsonAsync<List<RoutingPolicyResponse>>(
+            $"/api/v1/super-admin/routing-policies/deleted/department/{departmentId}");
+        Assert.Contains(deletedByDepartment!, item => item.PolicyId == policy.PolicyId);
+
+        using var scope = host.Services.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<OrchestraDbContext>();
+        var deletedPolicy = await db.RoutingPolicies.SingleAsync(p => p.PolicyId == policy.PolicyId);
+        Assert.False(deletedPolicy.IsActive);
+        Assert.Equal(1, await db.AuditLogs.CountAsync(a =>
+            a.Action == "ROUTING_POLICY_DELETED" && a.TargetId == policy.PolicyId));
+    }
+
+    [Fact]
+    public async Task Super_admin_can_patch_a_policy_and_audit_the_before_and_after_values()
+    {
+        await using var host = new ApiHost();
+        var modelId = await host.SeedModelAsync("ACTIVE");
+        var client = await SuperAdminClientAsync(host);
+        var created = await client.PostAsJsonAsync("/api/v1/super-admin/routing-policies",
+            Request(modelId, "CODING"));
+        var policy = await created.Content.ReadFromJsonAsync<RoutingPolicyResponse>();
+
+        var response = await client.PatchAsJsonAsync(
+            $"/api/v1/super-admin/routing-policies/{policy!.PolicyId}",
+            new { policyName = "Updated coding policy", priority = 5, isEnabled = false });
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var updated = await response.Content.ReadFromJsonAsync<RoutingPolicyResponse>();
+        Assert.Equal("Updated coding policy", updated?.PolicyName);
+        Assert.Equal(5, updated?.Priority);
+        Assert.False(updated?.IsEnabled);
+
+        using var scope = host.Services.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<OrchestraDbContext>();
+        var audit = await db.AuditLogs.SingleAsync(a =>
+            a.Action == "ROUTING_POLICY_UPDATED" && a.TargetId == policy.PolicyId);
+        Assert.Contains("CODING", audit.OldValues);
+        Assert.Contains("Updated coding policy", audit.NewValues);
+    }
+
+    [Fact]
+    public async Task Super_admin_can_list_deleted_policies_by_scope_and_department()
+    {
+        await using var host = new ApiHost();
+        var modelId = await host.SeedModelAsync("ACTIVE");
+        var departmentId = await host.SeedDepartmentAsync("Engineering", "ACTIVE");
+        var client = await SuperAdminClientAsync(host);
+        var globalResponse = await client.PostAsJsonAsync(
+            "/api/v1/super-admin/routing-policies", Request(modelId, "GENERAL_PURPOSE"));
+        var departmentResponse = await client.PostAsJsonAsync(
+            "/api/v1/super-admin/routing-policies",
+            Request(modelId, "CODING", "DEPARTMENT", departmentId));
+        var globalPolicy = await globalResponse.Content.ReadFromJsonAsync<RoutingPolicyResponse>();
+        var departmentPolicy = await departmentResponse.Content.ReadFromJsonAsync<RoutingPolicyResponse>();
+
+        await client.DeleteAsync($"/api/v1/super-admin/routing-policies/{globalPolicy!.PolicyId}");
+        await client.DeleteAsync($"/api/v1/super-admin/routing-policies/{departmentPolicy!.PolicyId}");
+
+        var deletedGlobal = await client.GetFromJsonAsync<List<RoutingPolicyResponse>>(
+            "/api/v1/super-admin/routing-policies/deleted/scope/GLOBAL");
+        var deletedDepartmentScope = await client.GetFromJsonAsync<List<RoutingPolicyResponse>>(
+            "/api/v1/super-admin/routing-policies/deleted/scope/DEPARTMENT");
+        var deletedDepartment = await client.GetFromJsonAsync<List<RoutingPolicyResponse>>(
+            $"/api/v1/super-admin/routing-policies/deleted/department/{departmentId}");
+
+        Assert.Contains(deletedGlobal!, p => p.PolicyId == globalPolicy.PolicyId);
+        Assert.Contains(deletedDepartmentScope!, p => p.PolicyId == departmentPolicy.PolicyId);
+        Assert.Contains(deletedDepartment!, p => p.PolicyId == departmentPolicy.PolicyId);
     }
 
     [Fact]
@@ -93,7 +239,11 @@ public sealed class RoutingPolicyTests
         Assert.Equal(HttpStatusCode.Forbidden,
             (await user.PostAsJsonAsync("/api/v1/super-admin/routing-policies", Request(modelId, "CODING"))).StatusCode);
         Assert.Equal(HttpStatusCode.Forbidden,
+            (await user.DeleteAsync($"/api/v1/super-admin/routing-policies/{Guid.NewGuid()}")).StatusCode);
+        Assert.Equal(HttpStatusCode.Forbidden,
             (await admin.PostAsJsonAsync("/api/v1/super-admin/routing-policies", Request(modelId, "CODING"))).StatusCode);
+        Assert.Equal(HttpStatusCode.Forbidden,
+            (await admin.DeleteAsync($"/api/v1/super-admin/routing-policies/{Guid.NewGuid()}")).StatusCode);
     }
 
     [Fact]
@@ -183,14 +333,19 @@ public sealed class RoutingPolicyTests
 
     private sealed record RoutingPolicyResponse(
         Guid PolicyId,
+        string PolicyName,
         string TaskCategory,
-        string ScopeType);
+        string ScopeType,
+        int Priority,
+        bool IsEnabled);
 
     private sealed record ApiErrorResponse(
         string Code,
         string Message,
         string RequestId,
         Dictionary<string, string[]>? Errors);
+
+    private sealed record DeleteSuccessResponse(string Message);
 }
 
 public static class RoutingPolicyTestData

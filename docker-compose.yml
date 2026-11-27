@@ -20,6 +20,10 @@ services:
       - ./infrastructure/database/migrations/004_routing_policies.sql:/docker-entrypoint-initdb.d/004_routing_policies.sql:ro
       - ./infrastructure/database/migrations/004_super_admin_feature_flags.sql:/docker-entrypoint-initdb.d/004_super_admin_feature_flags.sql:ro
       - ./infrastructure/database/migrations/005_platform_setting_apply_flag.sql:/docker-entrypoint-initdb.d/005_platform_setting_apply_flag.sql:ro
+      - ./infrastructure/database/migrations/006_routing_policy_delete.sql:/docker-entrypoint-initdb.d/006_routing_policy_delete.sql:ro
+      - ./infrastructure/database/migrations/007_routing_policy_patch_and_deleted_reads.sql:/docker-entrypoint-initdb.d/007_routing_policy_patch_and_deleted_reads.sql:ro
+      - ./infrastructure/database/migrations/008_routing_policy_read_shape.sql:/docker-entrypoint-initdb.d/008_routing_policy_read_shape.sql:ro
+      - ./infrastructure/database/migrations/009_routing_policy_uniqueness_and_reads.sql:/docker-entrypoint-initdb.d/009_routing_policy_uniqueness_and_reads.sql:ro
 
 volumes:
   postgres_data:

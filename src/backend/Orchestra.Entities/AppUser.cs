@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 
 namespace Orchestra.Api.Models.Entities;
@@ -6,8 +6,6 @@ namespace Orchestra.Api.Models.Entities;
 public partial class AppUser
 {
     public Guid UserId { get; set; }
-
-    public byte[]? AvatarData { get; set; }
 
     public string Email { get; set; } = null!;
 
@@ -53,6 +51,8 @@ public partial class AppUser
 
     public Guid? UpdatedByUserId { get; set; }
 
+    public byte[]? AvatarData { get; set; }
+
     public virtual ICollection<AdditionalCreditRequest> AdditionalCreditRequestRequestedByUsers { get; set; } = new List<AdditionalCreditRequest>();
 
     public virtual ICollection<AdditionalCreditRequest> AdditionalCreditRequestReviewedByUsers { get; set; } = new List<AdditionalCreditRequest>();
@@ -93,10 +93,6 @@ public partial class AppUser
 
     public virtual ICollection<ModelPricing> ModelPricings { get; set; } = new List<ModelPricing>();
 
-    public virtual ICollection<ModelSelectionPolicy> ModelSelectionPolicyCreatedByUsers { get; set; } = new List<ModelSelectionPolicy>();
-
-    public virtual ICollection<ModelSelectionPolicy> ModelSelectionPolicyUpdatedByUsers { get; set; } = new List<ModelSelectionPolicy>();
-
     public virtual ICollection<Notification> Notifications { get; set; } = new List<Notification>();
 
     public virtual ICollection<PlatformSetting> PlatformSettings { get; set; } = new List<PlatformSetting>();
@@ -109,9 +105,13 @@ public partial class AppUser
 
     public virtual Role RoleCodeNavigation { get; set; } = null!;
 
+    public virtual ICollection<RoutingPolicy> RoutingPolicies { get; set; } = new List<RoutingPolicy>();
+
     public virtual ICollection<SystemLog> SystemLogs { get; set; } = new List<SystemLog>();
 
     public virtual AppUser? UpdatedByUser { get; set; }
+
+    public virtual ICollection<UserPreference> UserPreferences { get; set; } = new List<UserPreference>();
 
     public virtual ICollection<VerificationCode> VerificationCodes { get; set; } = new List<VerificationCode>();
 }

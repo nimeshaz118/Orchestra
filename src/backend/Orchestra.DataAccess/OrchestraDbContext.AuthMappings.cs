@@ -9,6 +9,11 @@ public partial class OrchestraDbContext
 
     partial void OnModelCreatingPartial(ModelBuilder modelBuilder)
     {
+        modelBuilder.Entity<PlatformSetting>()
+            .Property(setting => setting.IsApplied)
+            .HasColumnName("is_applied")
+            .HasDefaultValue(false);
+
         // Partial unique indexes limit privileged accounts, but ordinary users share USER.
         // Npgsql scaffolds the role FK as one-to-one; correct it without editing generated files.
         modelBuilder.Entity<Role>().Ignore(role => role.AppUser);

@@ -13,13 +13,13 @@ public partial class PlatformSetting
 
     public bool IsSensitive { get; set; }
 
-    public bool IsApplied { get; set; }
-
     public DateTime CreatedAt { get; set; }
 
     public DateTime UpdatedAt { get; set; }
 
     public Guid? UpdatedByUserId { get; set; }
+
+    public bool IsApplied { get; set; }
 
     public virtual AppUser? UpdatedByUser { get; set; }
 }

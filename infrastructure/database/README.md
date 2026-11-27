@@ -10,6 +10,11 @@ Apply these scripts in order to a new PostgreSQL database before running the API
 6. [`004_provider_read_procedures.sql`](migrations/004_provider_read_procedures.sql) installs provider list/read procedures.
 7. [`004_super_admin_feature_flags.sql`](migrations/004_super_admin_feature_flags.sql) installs the Super Admin feature flag listing procedure.
 8. [`005_platform_setting_apply_flag.sql`](migrations/005_platform_setting_apply_flag.sql) adds the per-setting apply flag and installs the current platform settings procedures.
+9. [`006_routing_policy_delete.sql`](migrations/006_routing_policy_delete.sql) installs the atomic, audited routing policy deletion procedure.
+10. [`007_routing_policy_patch_and_deleted_reads.sql`](migrations/007_routing_policy_patch_and_deleted_reads.sql) installs routing policy patch, active read, and deleted-policy listing procedures.
+11. [`008_routing_policy_read_shape.sql`](migrations/008_routing_policy_read_shape.sql) aligns all routing-policy procedure result columns with the API reader, including `is_active`.
+12. [`009_routing_policy_uniqueness_and_reads.sql`](migrations/009_routing_policy_uniqueness_and_reads.sql) archives older duplicate active definitions (with system audit records), prevents new duplicates, and refreshes the department-list and soft-delete procedures.
+13. [`010_routing_policy_delete_feedback.sql`](migrations/010_routing_policy_delete_feedback.sql) makes the soft-delete procedure distinguish successful deletion, an already-deleted policy, and a missing policy.
 
 For an existing database with the superseded draft table and procedures, run `005_platform_setting_apply_flag.sql` to remove them; any rows still in the draft table are discarded, while platform setting rows are preserved. Docker Compose runs the current setup scripts when it initializes an empty volume. For an existing database or Docker volume, apply missing scripts in order using pgAdmin or `psql` before starting the updated API. If you already ran the one-off SQL to remove drafts and add `is_applied`, still apply this migration: it safely repeats those schema steps and also updates the stored procedures. Existing settings remain applied; newly created settings default to unapplied.
 

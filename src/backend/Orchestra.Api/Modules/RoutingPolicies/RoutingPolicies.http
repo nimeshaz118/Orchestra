@@ -1,0 +1,35 @@
+@baseUrl = https://localhost:7235/api/v1/super-admin/routing-policies
+@token = YOUR_SUPER_ADMIN_ACCESS_TOKEN
+@policyId = 00000000-0000-0000-0000-000000000001
+@departmentId = 00000000-0000-0000-0000-000000000002
+
+### List active policies for a department
+GET {{baseUrl}}/department/{{departmentId}}
+Authorization: Bearer {{token}}
+
+### Patch selected fields on a routing policy
+PATCH {{baseUrl}}/{{policyId}}
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{
+  "policyName": "Updated coding policy",
+  "priority": 5,
+  "isEnabled": false
+}
+
+### Soft-delete a routing policy (it remains in deleted-policy results)
+DELETE {{baseUrl}}/{{policyId}}
+Authorization: Bearer {{token}}
+
+### List deleted global-scope policies
+GET {{baseUrl}}/deleted/scope/GLOBAL
+Authorization: Bearer {{token}}
+
+### List deleted department-scope policies
+GET {{baseUrl}}/deleted/scope/DEPARTMENT
+Authorization: Bearer {{token}}
+
+### List deleted policies for a department
+GET {{baseUrl}}/deleted/department/{{departmentId}}
+Authorization: Bearer {{token}}

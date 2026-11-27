@@ -37,9 +37,9 @@ public partial class Department
 
     public virtual ICollection<DepartmentModel> DepartmentModels { get; set; } = new List<DepartmentModel>();
 
-    public virtual ModelSelectionPolicy? ModelSelectionPolicy { get; set; }
-
     public virtual QuotaPolicy? QuotaPolicy { get; set; }
+
+    public virtual ICollection<RoutingPolicy> RoutingPolicies { get; set; } = new List<RoutingPolicy>();
 
     public virtual AppUser? UpdatedByUser { get; set; }
 }

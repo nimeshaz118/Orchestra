@@ -4,6 +4,33 @@
 !.env.example
 *.user
 *.local
+*.local.json
+*.secret
+*.secret.*
+*.secrets.json
+*.pem
+*.key
+*.p12
+*.pfx
+*.jks
+*.keystore
+id_rsa
+id_rsa.*
+id_ed25519
+id_ed25519.*
+id_ecdsa
+id_ecdsa.*
+.netrc
+.git-credentials
+.aws/
+.azure/
+.config/gcloud/
+docker-compose.override.yml
+docker-compose.*.local.yml
+
+# Local infrastructure state
+*.tfstate
+*.tfstate.*
 
 _tmp-test-unlocked/
 
@@ -45,5 +72,7 @@ Desktop.ini
 # SonarQube for testing
 .sonarqube/
 .scannerwork/
+.sonar/
 docker-compose.sonarqube.yml
-/coverage.xml
+**/coverage.xml
+report-task.txt

@@ -1,5 +1,6 @@
 namespace Orchestra.Api.Modules.RoutingPolicies.DTOs;
 
+/// <summary>Fields required to create a routing policy.</summary>
 public sealed record CreateRoutingPolicyRequest(
     string? PolicyName,
     string? Description,

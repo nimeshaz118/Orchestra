@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using Microsoft.EntityFrameworkCore;
 using Orchestra.Api.Models.Entities;
@@ -40,11 +40,9 @@ public partial class OrchestraDbContext : DbContext
 
     public virtual DbSet<DepartmentModel> DepartmentModels { get; set; }
 
-    public virtual DbSet<ModelPricing> ModelPricings { get; set; }
-
     public virtual DbSet<ModelPerformanceMetric> ModelPerformanceMetrics { get; set; }
 
-    public virtual DbSet<ModelSelectionPolicy> ModelSelectionPolicies { get; set; }
+    public virtual DbSet<ModelPricing> ModelPricings { get; set; }
 
     public virtual DbSet<Notification> Notifications { get; set; }
 
@@ -58,9 +56,9 @@ public partial class OrchestraDbContext : DbContext
 
     public virtual DbSet<RequestRoutingAttempt> RequestRoutingAttempts { get; set; }
 
-    public virtual DbSet<RoutingPolicy> RoutingPolicies { get; set; }
-
     public virtual DbSet<Role> Roles { get; set; }
+
+    public virtual DbSet<RoutingPolicy> RoutingPolicies { get; set; }
 
     public virtual DbSet<SystemLog> SystemLogs { get; set; }
 
@@ -363,8 +361,6 @@ public partial class OrchestraDbContext : DbContext
 
             entity.ToTable("app_user", "ai_orchestration");
 
-            entity.Property(e => e.AvatarData).HasColumnName("avatar_data");
-
             entity.HasIndex(e => new { e.DepartmentId, e.Status }, "ix_app_user_department_status").HasFilter("(deleted_at IS NULL)");
 
             entity.HasIndex(e => e.RoleCode, "ux_one_active_admin")
@@ -378,6 +374,7 @@ public partial class OrchestraDbContext : DbContext
             entity.Property(e => e.UserId)
                 .HasDefaultValueSql("gen_random_uuid()")
                 .HasColumnName("user_id");
+            entity.Property(e => e.AvatarData).HasColumnName("avatar_data");
             entity.Property(e => e.CreatedAt)
                 .HasDefaultValueSql("now()")
                 .HasColumnName("created_at");
@@ -747,6 +744,55 @@ public partial class OrchestraDbContext : DbContext
                 .HasConstraintName("department_model_updated_by_user_id_fkey");
         });
 
+        modelBuilder.Entity<ModelPerformanceMetric>(entity =>
+        {
+            entity.HasKey(e => e.MetricId).HasName("model_performance_metrics_pkey");
+
+            entity.ToTable("model_performance_metrics", "ai_orchestration");
+
+            entity.HasIndex(e => new { e.TaskCategory, e.LastUpdatedAt }, "ix_model_metrics_category_updated");
+
+            entity.HasIndex(e => new { e.ModelId, e.TaskCategory }, "ix_model_metrics_model_category");
+
+            entity.HasIndex(e => new { e.ModelId, e.TaskCategory, e.MeasurementWindowStart, e.MeasurementWindowEnd }, "uq_model_metrics_window").IsUnique();
+
+            entity.Property(e => e.MetricId)
+                .HasDefaultValueSql("gen_random_uuid()")
+                .HasColumnName("metric_id");
+            entity.Property(e => e.AverageCostPerRequest)
+                .HasPrecision(18, 8)
+                .HasColumnName("average_cost_per_request");
+            entity.Property(e => e.AverageResponseTimeMs)
+                .HasPrecision(12, 2)
+                .HasColumnName("average_response_time_ms");
+            entity.Property(e => e.Currency)
+                .HasMaxLength(10)
+                .HasColumnName("currency");
+            entity.Property(e => e.FailedRequests).HasColumnName("failed_requests");
+            entity.Property(e => e.LastUpdatedAt)
+                .HasDefaultValueSql("now()")
+                .HasColumnName("last_updated_at");
+            entity.Property(e => e.MeasurementWindowEnd).HasColumnName("measurement_window_end");
+            entity.Property(e => e.MeasurementWindowStart).HasColumnName("measurement_window_start");
+            entity.Property(e => e.ModelId).HasColumnName("model_id");
+            entity.Property(e => e.SuccessRate)
+                .HasPrecision(5, 2)
+                .HasColumnName("success_rate");
+            entity.Property(e => e.SuccessfulRequests).HasColumnName("successful_requests");
+            entity.Property(e => e.TaskCategory)
+                .HasMaxLength(30)
+                .HasColumnName("task_category");
+            entity.Property(e => e.TotalProviderCost)
+                .HasPrecision(18, 8)
+                .HasColumnName("total_provider_cost");
+            entity.Property(e => e.TotalRequests).HasColumnName("total_requests");
+
+            entity.HasOne(d => d.Model).WithMany(p => p.ModelPerformanceMetrics)
+                .HasForeignKey(d => d.ModelId)
+                .OnDelete(DeleteBehavior.ClientSetNull)
+                .HasConstraintName("model_performance_metrics_model_id_fkey");
+        });
+
         modelBuilder.Entity<ModelPricing>(entity =>
         {
             entity.HasKey(e => e.PricingId).HasName("model_pricing_pkey");
@@ -791,170 +837,6 @@ public partial class OrchestraDbContext : DbContext
                 .HasForeignKey<ModelPricing>(d => d.ModelId)
                 .OnDelete(DeleteBehavior.ClientSetNull)
                 .HasConstraintName("model_pricing_model_id_fkey");
-        });
-
-        modelBuilder.Entity<ModelSelectionPolicy>(entity =>
-        {
-            entity.HasKey(e => e.PolicyId).HasName("model_selection_policy_pkey");
-
-            entity.ToTable("model_selection_policy", "ai_orchestration");
-
-            entity.HasIndex(e => e.DepartmentId, "ux_one_active_department_selection_policy")
-                .IsUnique()
-                .HasFilter("((department_id IS NOT NULL) AND (is_active = true))");
-
-            entity.Property(e => e.PolicyId)
-                .HasDefaultValueSql("gen_random_uuid()")
-                .HasColumnName("policy_id");
-            entity.Property(e => e.CostWeight)
-                .HasPrecision(5, 4)
-                .HasDefaultValue(0.4000m)
-                .HasColumnName("cost_weight");
-            entity.Property(e => e.CreatedAt)
-                .HasDefaultValueSql("now()")
-                .HasColumnName("created_at");
-            entity.Property(e => e.CreatedByUserId).HasColumnName("created_by_user_id");
-            entity.Property(e => e.DepartmentId).HasColumnName("department_id");
-            entity.Property(e => e.FallbackModelId).HasColumnName("fallback_model_id");
-            entity.Property(e => e.IsActive)
-                .HasDefaultValue(true)
-                .HasColumnName("is_active");
-            entity.Property(e => e.LatencyWeight)
-                .HasPrecision(5, 4)
-                .HasDefaultValue(0.2000m)
-                .HasColumnName("latency_weight");
-            entity.Property(e => e.MaximumCostPerRequest)
-                .HasPrecision(20, 8)
-                .HasColumnName("maximum_cost_per_request");
-            entity.Property(e => e.PolicyName)
-                .HasMaxLength(150)
-                .HasColumnName("policy_name");
-            entity.Property(e => e.QualityWeight)
-                .HasPrecision(5, 4)
-                .HasDefaultValue(0.4000m)
-                .HasColumnName("quality_weight");
-            entity.Property(e => e.Rules)
-                .HasDefaultValueSql("'{}'::jsonb")
-                .HasColumnType("jsonb")
-                .HasColumnName("rules");
-            entity.Property(e => e.UpdatedAt)
-                .HasDefaultValueSql("now()")
-                .HasColumnName("updated_at");
-            entity.Property(e => e.UpdatedByUserId).HasColumnName("updated_by_user_id");
-
-            entity.HasOne(d => d.CreatedByUser).WithMany(p => p.ModelSelectionPolicyCreatedByUsers)
-                .HasForeignKey(d => d.CreatedByUserId)
-                .OnDelete(DeleteBehavior.SetNull)
-                .HasConstraintName("model_selection_policy_created_by_user_id_fkey");
-
-            entity.HasOne(d => d.Department).WithOne(p => p.ModelSelectionPolicy)
-                .HasForeignKey<ModelSelectionPolicy>(d => d.DepartmentId)
-                .HasConstraintName("model_selection_policy_department_id_fkey");
-
-            entity.HasOne(d => d.FallbackModel).WithMany(p => p.ModelSelectionPolicies)
-                .HasForeignKey(d => d.FallbackModelId)
-                .HasConstraintName("model_selection_policy_fallback_model_id_fkey");
-
-            entity.HasOne(d => d.UpdatedByUser).WithMany(p => p.ModelSelectionPolicyUpdatedByUsers)
-                .HasForeignKey(d => d.UpdatedByUserId)
-                .OnDelete(DeleteBehavior.SetNull)
-                .HasConstraintName("model_selection_policy_updated_by_user_id_fkey");
-        });
-
-        modelBuilder.Entity<RoutingPolicy>(entity =>
-        {
-            entity.HasKey(e => e.PolicyId).HasName("routing_policy_pkey");
-
-            entity.ToTable("routing_policy", "ai_orchestration");
-
-            entity.HasIndex(e => new { e.TaskCategory, e.IsEnabled }, "ix_routing_policy_category_enabled");
-            entity.HasIndex(e => new { e.DepartmentId, e.TaskCategory }, "ix_routing_policy_department_category");
-            entity.HasIndex(e => e.ModelId, "ix_routing_policy_model");
-
-            entity.Property(e => e.PolicyId)
-                .HasDefaultValueSql("gen_random_uuid()")
-                .HasColumnName("policy_id");
-            entity.Property(e => e.PolicyName)
-                .HasMaxLength(150)
-                .HasColumnName("policy_name");
-            entity.Property(e => e.Description).HasColumnName("description");
-            entity.Property(e => e.ModelId).HasColumnName("model_id");
-            entity.Property(e => e.TaskCategory)
-                .HasMaxLength(30)
-                .HasColumnName("task_category");
-            entity.Property(e => e.ScopeType)
-                .HasMaxLength(20)
-                .HasColumnName("scope_type");
-            entity.Property(e => e.DepartmentId).HasColumnName("department_id");
-            entity.Property(e => e.Priority).HasColumnName("priority");
-            entity.Property(e => e.IsEnabled)
-                .HasDefaultValue(true)
-                .HasColumnName("is_enabled");
-            entity.Property(e => e.CreatedBy).HasColumnName("created_by");
-            entity.Property(e => e.CreatedAt)
-                .HasDefaultValueSql("now()")
-                .HasColumnName("created_at");
-            entity.Property(e => e.UpdatedAt)
-                .HasDefaultValueSql("now()")
-                .HasColumnName("updated_at");
-
-            entity.HasOne(d => d.Model).WithMany()
-                .HasForeignKey(d => d.ModelId)
-                .HasConstraintName("routing_policy_model_id_fkey");
-            entity.HasOne(d => d.Department).WithMany()
-                .HasForeignKey(d => d.DepartmentId)
-                .HasConstraintName("routing_policy_department_id_fkey");
-            entity.HasOne(d => d.CreatedByUser).WithMany()
-                .HasForeignKey(d => d.CreatedBy)
-                .OnDelete(DeleteBehavior.ClientSetNull)
-                .HasConstraintName("routing_policy_created_by_fkey");
-        });
-
-        modelBuilder.Entity<ModelPerformanceMetric>(entity =>
-        {
-            entity.HasKey(e => e.MetricId).HasName("model_performance_metrics_pkey");
-
-            entity.ToTable("model_performance_metrics", "ai_orchestration");
-
-            entity.HasIndex(e => new { e.ModelId, e.TaskCategory }, "ix_model_metrics_model_category");
-            entity.HasIndex(e => new { e.TaskCategory, e.LastUpdatedAt }, "ix_model_metrics_category_updated");
-            entity.HasIndex(e => new { e.ModelId, e.TaskCategory, e.MeasurementWindowStart, e.MeasurementWindowEnd },
-                "uq_model_metrics_window").IsUnique();
-
-            entity.Property(e => e.MetricId)
-                .HasDefaultValueSql("gen_random_uuid()")
-                .HasColumnName("metric_id");
-            entity.Property(e => e.ModelId).HasColumnName("model_id");
-            entity.Property(e => e.TaskCategory)
-                .HasMaxLength(30)
-                .HasColumnName("task_category");
-            entity.Property(e => e.TotalRequests).HasColumnName("total_requests");
-            entity.Property(e => e.SuccessfulRequests).HasColumnName("successful_requests");
-            entity.Property(e => e.FailedRequests).HasColumnName("failed_requests");
-            entity.Property(e => e.SuccessRate)
-                .HasPrecision(5, 2)
-                .HasColumnName("success_rate");
-            entity.Property(e => e.AverageResponseTimeMs)
-                .HasPrecision(12, 2)
-                .HasColumnName("average_response_time_ms");
-            entity.Property(e => e.TotalProviderCost)
-                .HasPrecision(18, 8)
-                .HasColumnName("total_provider_cost");
-            entity.Property(e => e.AverageCostPerRequest)
-                .HasPrecision(18, 8)
-                .HasColumnName("average_cost_per_request");
-            entity.Property(e => e.Currency)
-                .HasMaxLength(10)
-                .HasColumnName("currency");
-            entity.Property(e => e.MeasurementWindowStart).HasColumnName("measurement_window_start");
-            entity.Property(e => e.MeasurementWindowEnd).HasColumnName("measurement_window_end");
-            entity.Property(e => e.LastUpdatedAt)
-                .HasDefaultValueSql("now()")
-                .HasColumnName("last_updated_at");
-
-            entity.HasOne(d => d.Model).WithMany()
-                .HasForeignKey(d => d.ModelId)
-                .HasConstraintName("model_performance_metrics_model_id_fkey");
         });
 
         modelBuilder.Entity<Notification>(entity =>
@@ -1039,10 +921,8 @@ public partial class OrchestraDbContext : DbContext
                 .HasDefaultValueSql("now()")
                 .HasColumnName("created_at");
             entity.Property(e => e.Description).HasColumnName("description");
+            entity.Property(e => e.IsApplied).HasColumnName("is_applied");
             entity.Property(e => e.IsSensitive).HasColumnName("is_sensitive");
-            entity.Property(e => e.IsApplied)
-                .HasDefaultValue(false)
-                .HasColumnName("is_applied");
             entity.Property(e => e.SettingValue)
                 .HasColumnType("jsonb")
                 .HasColumnName("setting_value");
@@ -1241,6 +1121,63 @@ public partial class OrchestraDbContext : DbContext
                 .HasColumnName("updated_at");
         });
 
+        modelBuilder.Entity<RoutingPolicy>(entity =>
+        {
+            entity.HasKey(e => e.PolicyId).HasName("routing_policy_pkey");
+
+            entity.ToTable("routing_policy", "ai_orchestration");
+
+            entity.HasIndex(e => new { e.TaskCategory, e.IsEnabled }, "ix_routing_policy_category_enabled");
+
+            entity.HasIndex(e => new { e.DepartmentId, e.TaskCategory }, "ix_routing_policy_department_category");
+
+            entity.HasIndex(e => e.ModelId, "ix_routing_policy_model");
+
+            entity.Property(e => e.PolicyId)
+                .HasDefaultValueSql("gen_random_uuid()")
+                .HasColumnName("policy_id");
+            entity.Property(e => e.CreatedAt)
+                .HasDefaultValueSql("now()")
+                .HasColumnName("created_at");
+            entity.Property(e => e.CreatedBy).HasColumnName("created_by");
+            entity.Property(e => e.DepartmentId).HasColumnName("department_id");
+            entity.Property(e => e.Description).HasColumnName("description");
+            entity.Property(e => e.IsActive)
+                .HasDefaultValue(true)
+                .HasColumnName("is_active");
+            entity.Property(e => e.IsEnabled)
+                .HasDefaultValue(true)
+                .HasColumnName("is_enabled");
+            entity.Property(e => e.ModelId).HasColumnName("model_id");
+            entity.Property(e => e.PolicyName)
+                .HasMaxLength(150)
+                .HasColumnName("policy_name");
+            entity.Property(e => e.Priority).HasColumnName("priority");
+            entity.Property(e => e.ScopeType)
+                .HasMaxLength(20)
+                .HasColumnName("scope_type");
+            entity.Property(e => e.TaskCategory)
+                .HasMaxLength(30)
+                .HasColumnName("task_category");
+            entity.Property(e => e.UpdatedAt)
+                .HasDefaultValueSql("now()")
+                .HasColumnName("updated_at");
+
+            entity.HasOne(d => d.CreatedByNavigation).WithMany(p => p.RoutingPolicies)
+                .HasForeignKey(d => d.CreatedBy)
+                .OnDelete(DeleteBehavior.ClientSetNull)
+                .HasConstraintName("routing_policy_created_by_fkey");
+
+            entity.HasOne(d => d.Department).WithMany(p => p.RoutingPolicies)
+                .HasForeignKey(d => d.DepartmentId)
+                .HasConstraintName("routing_policy_department_id_fkey");
+
+            entity.HasOne(d => d.Model).WithMany(p => p.RoutingPolicies)
+                .HasForeignKey(d => d.ModelId)
+                .OnDelete(DeleteBehavior.ClientSetNull)
+                .HasConstraintName("routing_policy_model_id_fkey");
+        });
+
         modelBuilder.Entity<SystemLog>(entity =>
         {
             entity.HasKey(e => e.SystemLogId).HasName("system_log_pkey");
@@ -1334,6 +1271,36 @@ public partial class OrchestraDbContext : DbContext
                 .HasConstraintName("usage_record_request_id_fkey");
         });
 
+        modelBuilder.Entity<UserPreference>(entity =>
+        {
+            entity.HasKey(e => e.PreferenceId).HasName("user_preference_pkey");
+
+            entity.ToTable("user_preference", "ai_orchestration");
+
+            entity.HasIndex(e => new { e.UserId, e.PreferenceKey }, "uq_user_preference_key").IsUnique();
+
+            entity.Property(e => e.PreferenceId)
+                .HasDefaultValueSql("gen_random_uuid()")
+                .HasColumnName("preference_id");
+            entity.Property(e => e.CreatedAt)
+                .HasDefaultValueSql("now()")
+                .HasColumnName("created_at");
+            entity.Property(e => e.PreferenceKey)
+                .HasMaxLength(100)
+                .HasColumnName("preference_key");
+            entity.Property(e => e.PreferenceValue)
+                .HasColumnType("jsonb")
+                .HasColumnName("preference_value");
+            entity.Property(e => e.UpdatedAt)
+                .HasDefaultValueSql("now()")
+                .HasColumnName("updated_at");
+            entity.Property(e => e.UserId).HasColumnName("user_id");
+
+            entity.HasOne(d => d.User).WithMany(p => p.UserPreferences)
+                .HasForeignKey(d => d.UserId)
+                .HasConstraintName("user_preference_user_id_fkey");
+        });
+
         modelBuilder.Entity<VerificationCode>(entity =>
         {
             entity.HasKey(e => e.VerificationCodeId).HasName("verification_code_pkey");
@@ -1366,44 +1333,6 @@ public partial class OrchestraDbContext : DbContext
             entity.HasOne(d => d.User).WithMany(p => p.VerificationCodes)
                 .HasForeignKey(d => d.UserId)
                 .HasConstraintName("verification_code_user_id_fkey");
-        });
-        
-        modelBuilder.Entity<UserPreference>(entity =>
-        {
-            entity.HasKey(e => e.PreferenceId);
-
-            entity.ToTable("user_preference", "ai_orchestration");
-
-            entity.HasIndex(e => new { e.UserId, e.PreferenceKey })
-                .IsUnique();
-
-            entity.Property(e => e.PreferenceId)
-                .HasColumnName("preference_id")
-                .HasDefaultValueSql("gen_random_uuid()");
-
-            entity.Property(e => e.PreferenceKey)
-                .HasColumnName("preference_key")
-                .HasMaxLength(100);
-
-            entity.Property(e => e.PreferenceValue)
-                .HasColumnName("preference_value")
-                .HasColumnType("jsonb");
-
-            entity.Property(e => e.CreatedAt)
-                .HasColumnName("created_at")
-                .HasDefaultValueSql("now()");
-
-            entity.Property(e => e.UpdatedAt)
-                .HasColumnName("updated_at")
-                .HasDefaultValueSql("now()");
-
-            entity.Property(e => e.UserId)
-                .HasColumnName("user_id");
-
-            entity.HasOne(e => e.User)
-                .WithMany()
-                .HasForeignKey(e => e.UserId)
-                .OnDelete(DeleteBehavior.Cascade);
         });
 
         OnModelCreatingPartial(modelBuilder);

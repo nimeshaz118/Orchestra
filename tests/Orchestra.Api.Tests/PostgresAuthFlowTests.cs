@@ -671,8 +671,14 @@ public sealed class PostgresAuthFlowTests
                     Path.Combine(migrations, "004_model_creation_procedure.sql"),
                     Path.Combine(migrations, "004_platform_setting_procedures.sql"),
                     Path.Combine(migrations, "004_provider_read_procedures.sql"),
+                    Path.Combine(migrations, "004_routing_policies.sql"),
                     Path.Combine(migrations, "004_super_admin_feature_flags.sql"),
-                    Path.Combine(migrations, "005_platform_setting_apply_flag.sql") })
+                    Path.Combine(migrations, "005_platform_setting_apply_flag.sql"),
+                    Path.Combine(migrations, "006_routing_policy_delete.sql"),
+                    Path.Combine(migrations, "007_routing_policy_patch_and_deleted_reads.sql"),
+                    Path.Combine(migrations, "008_routing_policy_read_shape.sql"),
+                    Path.Combine(migrations, "009_routing_policy_uniqueness_and_reads.sql"),
+                    Path.Combine(migrations, "010_routing_policy_delete_feedback.sql") })
                 {
                     await using var apply = new NpgsqlCommand(await File.ReadAllTextAsync(file), database);
                     await apply.ExecuteNonQueryAsync();

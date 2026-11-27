@@ -37,13 +37,15 @@ public partial class AiModel
 
     public virtual ICollection<DepartmentModel> DepartmentModels { get; set; } = new List<DepartmentModel>();
 
-    public virtual ModelPricing? ModelPricing { get; set; }
+    public virtual ICollection<ModelPerformanceMetric> ModelPerformanceMetrics { get; set; } = new List<ModelPerformanceMetric>();
 
-    public virtual ICollection<ModelSelectionPolicy> ModelSelectionPolicies { get; set; } = new List<ModelSelectionPolicy>();
+    public virtual ModelPricing? ModelPricing { get; set; }
 
     public virtual AiProvider Provider { get; set; } = null!;
 
     public virtual ICollection<RequestRoutingAttempt> RequestRoutingAttempts { get; set; } = new List<RequestRoutingAttempt>();
+
+    public virtual ICollection<RoutingPolicy> RoutingPolicies { get; set; } = new List<RoutingPolicy>();
 
     public virtual AppUser? UpdatedByUser { get; set; }
 }

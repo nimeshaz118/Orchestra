@@ -1,6 +1,7 @@
 namespace Orchestra.Api.Modules.RoutingPolicies.DTOs;
 
-public sealed record RoutingPolicyDto(
+/// <summary>Routing policy details returned by the API.</summary>
+public record RoutingPolicyDto(
     Guid PolicyId,
     string PolicyName,
     string? Description,
@@ -10,6 +11,8 @@ public sealed record RoutingPolicyDto(
     Guid? DepartmentId,
     int Priority,
     bool IsEnabled,
+    bool IsActive,
     Guid CreatedBy,
     DateTime CreatedAt,
-    DateTime UpdatedAt);
+    DateTime UpdatedAt
+);
