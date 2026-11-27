@@ -46,6 +46,24 @@ public sealed class DepartmentsController(DepartmentsService departments) : Cont
         return Ok(await departments.DeactivateAsync(departmentId, actor, ct));
     }
 
+    [Authorize(Roles = "ADMIN,SUPER_ADMIN"),
+     HttpPost("api/v1/admin/configurations/{departmentId:guid}/models/{modelId:guid}/enable")]
+    public async Task<IActionResult> EnableModel(
+        Guid departmentId, Guid modelId, CancellationToken ct)
+    {
+        var actor = Guid.Parse(User.FindFirstValue(JwtRegisteredClaimNames.Sub)!);
+        return Ok(await departments.EnableModelAsync(departmentId, modelId, actor, ct));
+    }
+
+    [Authorize(Roles = "ADMIN,SUPER_ADMIN"),
+     HttpPost("api/v1/admin/configurations/{departmentId:guid}/models/{modelId:guid}/disable")]
+    public async Task<IActionResult> DisableModel(
+        Guid departmentId, Guid modelId, CancellationToken ct)
+    {
+        var actor = Guid.Parse(User.FindFirstValue(JwtRegisteredClaimNames.Sub)!);
+        return Ok(await departments.DisableModelAsync(departmentId, modelId, actor, ct));
+    }
+
     [Authorize(Roles = "ADMIN,SUPER_ADMIN"), HttpPost("api/v1/admin/departments")]
     public async Task<IActionResult> Create(CreateDepartmentRequest request, CancellationToken ct)
     {

@@ -11,6 +11,8 @@ using System.Text.Json.Serialization;
 namespace Orchestra.Api.Modules.Departments;
 
 public sealed record DepartmentDto(Guid Id, string Name, string? Description, string Status);
+public sealed record DepartmentModelEligibilityDto(
+    Guid DepartmentId, string DepartmentName, Guid ModelId, string ModelName, bool IsEnabled);
 public sealed record CreateDepartmentRequest(string Name, string? Description);
 
 public sealed record UpdateDepartmentRequest
@@ -24,6 +26,73 @@ public sealed record UpdateDepartmentRequest
 
 public sealed class DepartmentsService(OrchestraDbContext db, IMapper mapper)
 {
+    public async Task<DepartmentModelEligibilityDto> EnableModelAsync(
+        Guid departmentId, Guid modelId, Guid actor, CancellationToken ct)
+    {
+        var department = await GetDepartmentAsync(departmentId, ct);
+        var model = await db.AiModels.SingleOrDefaultAsync(m => m.ModelId == modelId, ct)
+            ?? throw new ApiException(404, "MODEL_NOT_FOUND", "The model was not found.");
+
+        if (model.Status != "ACTIVE")
+            throw new ApiException(409, "MODEL_NOT_ACTIVE", "Only active models can be enabled for a department.");
+
+        var eligibility = await db.DepartmentModels.SingleOrDefaultAsync(
+            dm => dm.DepartmentId == departmentId && dm.ModelId == modelId, ct);
+
+        if (eligibility is null)
+        {
+            var now = DateTime.UtcNow;
+            eligibility = new DepartmentModel
+            {
+                DepartmentId = departmentId,
+                ModelId = modelId,
+                IsEnabled = true,
+                CreatedAt = now,
+                UpdatedAt = now,
+                UpdatedByUserId = actor
+            };
+            db.DepartmentModels.Add(eligibility);
+            await db.SaveChangesAsync(ct);
+        }
+        else if (!eligibility.IsEnabled)
+        {
+            eligibility.IsEnabled = true;
+            eligibility.UpdatedAt = DateTime.UtcNow;
+            eligibility.UpdatedByUserId = actor;
+            await db.SaveChangesAsync(ct);
+        }
+
+        return new DepartmentModelEligibilityDto(
+            departmentId, department.DepartmentName, modelId, model.DisplayName, true);
+    }
+
+    public async Task<DepartmentModelEligibilityDto> DisableModelAsync(
+        Guid departmentId, Guid modelId, Guid actor, CancellationToken ct)
+    {
+        var department = await GetDepartmentAsync(departmentId, ct);
+        var model = await db.AiModels.AsNoTracking()
+            .SingleOrDefaultAsync(m => m.ModelId == modelId, ct)
+            ?? throw new ApiException(404, "MODEL_NOT_FOUND", "The model was not found.");
+
+        var eligibility = await db.DepartmentModels.SingleOrDefaultAsync(
+            dm => dm.DepartmentId == departmentId && dm.ModelId == modelId, ct);
+        if (eligibility is not null && eligibility.IsEnabled)
+        {
+            eligibility.IsEnabled = false;
+            eligibility.UpdatedAt = DateTime.UtcNow;
+            eligibility.UpdatedByUserId = actor;
+            await db.SaveChangesAsync(ct);
+        }
+
+        return new DepartmentModelEligibilityDto(
+            departmentId, department.DepartmentName, modelId, model.DisplayName, false);
+    }
+
+    private async Task<Department> GetDepartmentAsync(Guid departmentId, CancellationToken ct) =>
+        await db.Departments.AsNoTracking()
+            .SingleOrDefaultAsync(d => d.DepartmentId == departmentId, ct)
+        ?? throw new ApiException(404, "DEPARTMENT_NOT_FOUND", "The department was not found.");
+
     public Task<List<DepartmentDto>> PublicListAsync(CancellationToken ct) => ListAsync(true, ct);
 
     public Task<List<DepartmentDto>> AdminListAsync(CancellationToken ct) => ListAsync(false, ct);
