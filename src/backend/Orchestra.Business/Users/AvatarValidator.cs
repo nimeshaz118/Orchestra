@@ -32,7 +32,7 @@ public static class AvatarValidator
         while ((read = await input.ReadAsync(chunk, ct)) > 0)
         {
             if (buffer.Length + read > MaxBytes) throw TooLarge();
-            buffer.Write(chunk, 0, read);
+            await buffer.WriteAsync(chunk.AsMemory(0, read), ct);
         }
         var bytes = buffer.ToArray();
         var signatureMatches = format == SKEncodedImageFormat.Png

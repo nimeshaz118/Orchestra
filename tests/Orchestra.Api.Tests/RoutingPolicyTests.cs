@@ -29,8 +29,7 @@ public sealed class RoutingPolicyTests
 
         var department = await client.GetFromJsonAsync<List<RoutingPolicyResponse>>(
             $"/api/v1/super-admin/routing-policies/department/{departmentId}");
-        Assert.Single(department!);
-        Assert.Equal("CODING", department[0].TaskCategory);
+        Assert.Equal("CODING", Assert.Single(department!).TaskCategory);
     }
 
     [Fact]

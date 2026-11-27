@@ -1,4 +1,5 @@
 using System.ComponentModel.DataAnnotations;
+using System.Diagnostics.CodeAnalysis;
 using System.IdentityModel.Tokens.Jwt;
 using System.Security.Claims;
 using AutoMapper;
@@ -6,6 +7,7 @@ using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.RateLimiting;
 using Orchestra.Api.Common;
+using Orchestra.Api.Modules.Maintenance;
 using Orchestra.Api.Modules.Users;
 
 namespace Orchestra.Api.Modules.Auth;
@@ -68,6 +70,8 @@ public sealed class AuthController(
     }
 
     [HttpPost("logout")]
+    [SuppressMessage("SonarAnalyzer.CSharp", "S6932",
+        Justification = "A present but empty Authorization header must be rejected like any invalid credential.")]
     public async Task<IActionResult> Logout(CancellationToken ct)
     {
         if (!HasTrustedOrigin()) return StatusCode(403, Error("UNTRUSTED_ORIGIN", "This request origin is not allowed."));
@@ -124,7 +128,7 @@ public sealed class AuthController(
         return Ok(new { message = "Password changed successfully." });
     }
 
-    [Authorize, HttpPost("change-password"), EnableRateLimiting("auth")]
+    [Authorize, HttpPost("change-password"), EnableRateLimiting("auth"), MaintenanceRecovery]
     public async Task<IActionResult> ChangePassword(ChangePasswordRequest request, CancellationToken ct)
     {
         var id = Guid.Parse(User.FindFirstValue(JwtRegisteredClaimNames.Sub)!);
@@ -145,6 +149,8 @@ public sealed class AuthController(
         HttpOnly = true, Secure = true, SameSite = SameSiteMode.None, Path = "/api/v1"
     });
 
+    [SuppressMessage("SonarAnalyzer.CSharp", "S6932",
+        Justification = "The origin check distinguishes an absent header from an empty or multi-value header.")]
     private bool HasTrustedOrigin()
     {
         if (!Request.Headers.TryGetValue("Origin", out var origin)) return true;

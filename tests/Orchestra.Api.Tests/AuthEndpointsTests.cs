@@ -372,6 +372,7 @@ public sealed class ApiHost : WebApplicationFactory<Program>
     public FakeEmailSender Email { get; } = new();
     public bool FailSessionSave { get; set; }
     public bool FailAvatarSave { get; set; }
+    public HttpMessageHandler? AiDiagnosticsHandler { get; init; }
 
     protected override void ConfigureWebHost(IWebHostBuilder builder)
     {
@@ -389,6 +390,14 @@ public sealed class ApiHost : WebApplicationFactory<Program>
             ["Bootstrap:SuperAdmin:Email"] = "",
             ["Bootstrap:SuperAdmin:Password"] = ""
         }));
+        if (AiDiagnosticsHandler is not null)
+        {
+            builder.ConfigureAppConfiguration((_, config) => config.AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["AiService:BaseUrl"] = "https://ai-service.example.test",
+                ["AiService:ServiceToken"] = "test-service-token"
+            }));
+        }
         builder.ConfigureServices(services =>
         {
             services.RemoveAll<DbContextOptions<OrchestraDbContext>>();
@@ -398,6 +407,9 @@ public sealed class ApiHost : WebApplicationFactory<Program>
                 .AddInterceptors(new SessionSaveFailure(this)));
             services.RemoveAll<IEmailSender>();
             services.AddSingleton<IEmailSender>(Email);
+            if (AiDiagnosticsHandler is { } handler)
+                services.AddHttpClient<Orchestra.Api.Modules.Catalog.AiDiagnosticsClient>()
+                    .ConfigurePrimaryHttpMessageHandler(() => handler);
         });
     }
 

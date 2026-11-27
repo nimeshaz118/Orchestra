@@ -1,3 +1,4 @@
+using System.Diagnostics.CodeAnalysis;
 using System.IdentityModel.Tokens.Jwt;
 using System.Security.Claims;
 using Microsoft.AspNetCore.Authorization;
@@ -5,6 +6,7 @@ using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.RateLimiting;
 using Orchestra.Api.Common;
 using Orchestra.Api.Modules.Auth;
+using Orchestra.Api.Modules.Maintenance;
 using Orchestra.Api.Modules.Users.Interfaces;
 
 namespace Orchestra.Api.Modules.Users;
@@ -74,7 +76,7 @@ public sealed class MeController(AuthService auth, MeService me, AvatarService a
         });
     }
 
-    [HttpPost("password"), EnableRateLimiting("auth")]
+    [HttpPost("password"), EnableRateLimiting("auth"), MaintenanceRecovery]
     public async Task<IActionResult> ChangePassword(ChangePasswordRequest request, CancellationToken ct)
     {
         var id = Guid.Parse(User.FindFirstValue(JwtRegisteredClaimNames.Sub)!);
@@ -93,6 +95,8 @@ public sealed class MeController(AuthService auth, MeService me, AvatarService a
     [RequestSizeLimit(AvatarValidator.MaxRequestBytes)]
     [RequestFormLimits(MultipartBodyLengthLimit = AvatarValidator.MaxRequestBytes,
         MemoryBufferThreshold = AvatarValidator.MaxRequestBytes)]
+    [SuppressMessage("SonarAnalyzer.CSharp", "S6932",
+        Justification = "The endpoint limits chunked bodies before form parsing and validates every uploaded file.")]
     public async Task<IActionResult> UploadAvatar()
     {
         var ct = HttpContext.RequestAborted;

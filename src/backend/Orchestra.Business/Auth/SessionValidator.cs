@@ -32,7 +32,7 @@ public sealed class SessionValidator(OrchestraDbContext db)
             !Guid.TryParse(principal?.FindFirstValue("sid"), out var sessionId))
             return new SessionValidationResult("Invalid identity.");
 
-        var user = await db.AppUsers.AsNoTracking().FirstOrDefaultAsync(u => u.UserId == id);
+        var user = await db.AppUsers.AsNoTracking().FirstOrDefaultAsync(u => u.UserId == id, ct);
         if (user is null || user.DeletedAt != null || user.SecurityStamp != stamp ||
             !principal!.IsInRole(user.RoleCode))
             return new SessionValidationResult("Invalid identity.");
