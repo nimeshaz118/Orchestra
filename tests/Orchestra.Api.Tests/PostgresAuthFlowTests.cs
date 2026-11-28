@@ -15,6 +15,8 @@ using Orchestra.Api.Modules.Catalog;
 using Orchestra.Api.Modules.Departments;
 using Orchestra.Api.Modules.Domains;
 using Orchestra.Api.Modules.FeatureFlags;
+using Orchestra.Api.Modules.Maintenance;
+using Orchestra.Api.Modules.Providers;
 using Orchestra.Api.Modules.Users;
 using Xunit;
 
@@ -22,6 +24,202 @@ namespace Orchestra.Api.Tests;
 
 public sealed class PostgresAuthFlowTests
 {
+    private static readonly string[] UnavailableProviderErrors = ["AI_SERVICE_UNAVAILABLE", "CATALOG_TEST_TIMEOUT"];
+    private static readonly string[] PublicDepartmentNames = ["Biology", "Zoology"];
+    private static readonly string[] ManagedDepartmentNames = ["Accounting", "Biology", "Zoology"];
+    private static readonly string[] ManagedDomains = ["a.example.test", "z.example.test"];
+
+    [PostgresFact]
+    [Trait("Category", "PostgreSQL")]
+    public Task Super_admin_can_create_models_using_the_stored_procedure() => WithDatabaseAsync(async connection =>
+    {
+        var providerId = Guid.NewGuid();
+        await using (var database = new NpgsqlConnection(connection))
+        {
+            await database.OpenAsync();
+            await using var seed = new NpgsqlCommand("""
+                INSERT INTO ai_orchestration.ai_provider
+                    (provider_id, provider_name, base_url, status, timeout_seconds)
+                VALUES ($1, 'Model creation test provider', 'https://provider.example.test', 'INACTIVE', 60);
+                """, database);
+            seed.Parameters.Add(new NpgsqlParameter { Value = providerId });
+            await seed.ExecuteNonQueryAsync();
+        }
+
+        using var host = new PostgresHost(connection);
+        using var client = host.CreateClient(new WebApplicationFactoryClientOptions
+        {
+            BaseAddress = new Uri("https://localhost")
+        });
+
+        async Task SignInAsync(string password)
+        {
+            client.DefaultRequestHeaders.Authorization = null;
+            using var login = await client.PostAsJsonAsync("/api/v1/auth/login",
+                new { email = "super@example.test", password });
+            login.EnsureSuccessStatusCode();
+            var session = (await login.Content.ReadFromJsonAsync<LoginResponse>())!;
+            client.DefaultRequestHeaders.Authorization =
+                new AuthenticationHeaderValue("Bearer", session.AccessToken);
+        }
+
+        const string initialPassword = "initial-super-passphrase";
+        const string changedPassword = "changed-super-passphrase";
+        await SignInAsync(initialPassword);
+        using (var change = await client.PostAsJsonAsync("/api/v1/auth/change-password",
+            new { currentPassword = initialPassword, newPassword = changedPassword }))
+            change.EnsureSuccessStatusCode();
+        await SignInAsync(changedPassword);
+
+        var request = new
+        {
+            providerId,
+            providerModelKey = $"test/model-{Guid.NewGuid():N}",
+            displayName = "Test model",
+            modelType = "CHAT",
+            contextWindowTokens = 4096,
+            qualityTier = 3,
+            capabilities = new { streaming = true }
+        };
+        using var created = await client.PostAsJsonAsync(
+            "/api/v1/super-admin/models", request);
+        Assert.Equal(HttpStatusCode.Created, created.StatusCode);
+        var model = (await created.Content.ReadFromJsonAsync<CreatedModelResponse>())!;
+        Assert.NotEqual(Guid.Empty, model.Id);
+        Assert.Equal("INACTIVE", model.Status);
+        Assert.Equal($"/api/v1/super-admin/models/{model.Id}", created.Headers.Location?.OriginalString);
+
+        using var duplicate = await client.PostAsJsonAsync(
+            "/api/v1/super-admin/models", request);
+        Assert.Equal(HttpStatusCode.Conflict, duplicate.StatusCode);
+
+        var missingProviderRequest = new
+        {
+            providerId = Guid.NewGuid(),
+            request.providerModelKey,
+            request.displayName,
+            request.modelType,
+            request.contextWindowTokens,
+            request.qualityTier,
+            request.capabilities
+        };
+        using var missingProvider = await client.PostAsJsonAsync(
+            "/api/v1/super-admin/models", missingProviderRequest);
+        Assert.Equal(HttpStatusCode.NotFound, missingProvider.StatusCode);
+    });
+
+    [PostgresFact]
+    [Trait("Category", "PostgreSQL")]
+    public Task Maintenance_transitions_and_audits_are_shared_by_two_api_hosts() => WithDatabaseAsync(async connection =>
+    {
+        const string startPath = "/api/v1/super-admin/maintenance/start";
+        const string endPath = "/api/v1/super-admin/maintenance/end";
+        var settings = new Dictionary<string, string?>
+        {
+            ["AiService:BaseUrl"] = "",
+            ["AiService:ServiceToken"] = ""
+        };
+        using var baseHost = new PostgresHost(connection);
+        using var firstHost = baseHost.WithWebHostBuilder(builder => builder.ConfigureAppConfiguration(
+            (_, config) => config.AddInMemoryCollection(settings)));
+        using var secondHost = baseHost.WithWebHostBuilder(builder => builder.ConfigureAppConfiguration(
+            (_, config) => config.AddInMemoryCollection(settings)));
+        var clientOptions = new WebApplicationFactoryClientOptions { BaseAddress = new Uri("https://localhost") };
+        using var first = firstHost.CreateClient(clientOptions);
+        using var second = secondHost.CreateClient(clientOptions);
+
+        const string email = "super@example.test";
+        const string initialPassword = "initial-super-passphrase";
+        const string newPassword = "changed-super-passphrase";
+        async Task<AuthenticationHeaderValue> SignInAsync(string password)
+        {
+            using var response = await first.PostAsJsonAsync("/api/v1/auth/login", new { email, password });
+            response.EnsureSuccessStatusCode();
+            return new AuthenticationHeaderValue("Bearer",
+                (await response.Content.ReadFromJsonAsync<LoginResponse>())!.AccessToken);
+        }
+
+        first.DefaultRequestHeaders.Authorization = await SignInAsync(initialPassword);
+        using var change = await first.PostAsJsonAsync("/api/v1/auth/change-password",
+            new { currentPassword = initialPassword, newPassword });
+        change.EnsureSuccessStatusCode();
+        first.DefaultRequestHeaders.Authorization = await SignInAsync(newPassword);
+        second.DefaultRequestHeaders.Authorization = first.DefaultRequestHeaders.Authorization;
+
+        const string settingsPath = "/api/v1/super-admin/platform-settings";
+        var settingsList = (await first.GetFromJsonAsync<List<PlatformSettingDto>>(settingsPath))!;
+        Assert.DoesNotContain(settingsList, setting => setting.Key == "system.maintenance");
+        using var edit = await first.PatchAsJsonAsync(settingsPath, new { key = "system.maintenance", value = false });
+        Assert.Equal(HttpStatusCode.UnprocessableEntity, edit.StatusCode);
+        using var apply = await first.PostAsJsonAsync(settingsPath + "/apply",
+            new { key = "system.maintenance", action = "REVOKE" });
+        Assert.Equal(HttpStatusCode.UnprocessableEntity, apply.StatusCode);
+
+        var input = new StartMaintenanceRequest("Test concurrency", "A scheduled update is running.",
+            DateTimeOffset.Parse("2028-02-01T15:00:00.1234567+05:30"), "authenticated_operations", "allow_finish");
+        using var firstStart = new HttpRequestMessage(HttpMethod.Post, startPath) { Content = JsonContent.Create(input) };
+        using var secondStart = new HttpRequestMessage(HttpMethod.Post, startPath) { Content = JsonContent.Create(input) };
+        firstStart.Headers.Add("Idempotency-Key", "shared-postgres-start");
+        secondStart.Headers.Add("Idempotency-Key", "shared-postgres-start");
+        var starts = await Task.WhenAll(first.SendAsync(firstStart), second.SendAsync(secondStart));
+        using var started = starts[0];
+        using var replayed = starts[1];
+        Assert.Equal(HttpStatusCode.OK, started.StatusCode);
+        Assert.Equal(HttpStatusCode.OK, replayed.StatusCode);
+        var session = (await started.Content.ReadFromJsonAsync<MaintenanceStarted>())!;
+        Assert.Equal(session, await replayed.Content.ReadFromJsonAsync<MaintenanceStarted>());
+
+        using var startConflict = await second.PostAsJsonAsync(startPath, input);
+        Assert.Equal(HttpStatusCode.Conflict, startConflict.StatusCode);
+        Assert.Equal("MAINTENANCE_ALREADY_ACTIVE", (await startConflict.Content.ReadFromJsonAsync<ApiError>())?.Code);
+        using var changedRequest = new HttpRequestMessage(HttpMethod.Post, startPath)
+        {
+            Content = JsonContent.Create(input with { Reason = "Changed reason" })
+        };
+        changedRequest.Headers.Add("Idempotency-Key", "shared-postgres-start");
+        using var changed = await second.SendAsync(changedRequest);
+        Assert.Equal(HttpStatusCode.Conflict, changed.StatusCode);
+        Assert.Equal("IDEMPOTENCY_CONFLICT", (await changed.Content.ReadFromJsonAsync<ApiError>())?.Code);
+        using var blocked = await second.GetAsync("/api/v1/me");
+        Assert.Equal(HttpStatusCode.ServiceUnavailable, blocked.StatusCode);
+        Assert.True((await second.GetFromJsonAsync<SystemStatus>("/api/v1/system/status"))!.MaintenanceActive);
+
+        var outcome = new EndMaintenanceRequest("The concurrent maintenance test finished.");
+        var ends = await Task.WhenAll(first.PostAsJsonAsync(endPath, outcome), second.PostAsJsonAsync(endPath, outcome));
+        using var ended = Assert.Single(ends, response => response.StatusCode == HttpStatusCode.OK);
+        using var endConflict = Assert.Single(ends, response => response.StatusCode == HttpStatusCode.Conflict);
+        Assert.Equal("MAINTENANCE_NOT_ACTIVE", (await endConflict.Content.ReadFromJsonAsync<ApiError>())?.Code);
+        var result = (await ended.Content.ReadFromJsonAsync<MaintenanceEnded>())!;
+        Assert.Equal(session.MaintenanceId, result.MaintenanceId);
+        Assert.Equal("authenticated_api", Assert.Single(result.RestoredServices));
+        Assert.Equal("ai", Assert.Single(result.UnavailableServices));
+        using var resumed = await second.GetAsync("/api/v1/me");
+        Assert.Equal(HttpStatusCode.OK, resumed.StatusCode);
+        Assert.False((await second.GetFromJsonAsync<SystemStatus>("/api/v1/system/status"))!.MaintenanceActive);
+        using var replayRequest = new HttpRequestMessage(HttpMethod.Post, startPath) { Content = JsonContent.Create(input) };
+        replayRequest.Headers.Add("Idempotency-Key", "shared-postgres-start");
+        using var replayAfterEnd = await second.SendAsync(replayRequest);
+        Assert.Equal(HttpStatusCode.OK, replayAfterEnd.StatusCode);
+        Assert.Equal(session, await replayAfterEnd.Content.ReadFromJsonAsync<MaintenanceStarted>());
+        Assert.False((await second.GetFromJsonAsync<SystemStatus>("/api/v1/system/status"))!.MaintenanceActive);
+
+        await using var db = new NpgsqlConnection(connection);
+        await db.OpenAsync();
+        await using var audit = new NpgsqlCommand("""
+            SELECT action FROM ai_orchestration.audit_log
+            WHERE target_type = 'maintenance_session' AND target_id = $1
+            ORDER BY occurred_at;
+            """, db);
+        audit.Parameters.Add(new NpgsqlParameter { Value = session.MaintenanceId });
+        await using var rows = await audit.ExecuteReaderAsync();
+        Assert.True(await rows.ReadAsync());
+        Assert.Equal("MAINTENANCE_STARTED", rows.GetString(0));
+        Assert.True(await rows.ReadAsync());
+        Assert.Equal("MAINTENANCE_ENDED", rows.GetString(0));
+        Assert.False(await rows.ReadAsync());
+
+    });
+
     [PostgresFact]
     [Trait("Category", "PostgreSQL")]
     public Task Super_admin_can_test_providers_and_models_loaded_from_stored_procedures() => WithDatabaseAsync(async connection =>
@@ -34,8 +232,10 @@ public sealed class PostgresAuthFlowTests
             await using var seed = new NpgsqlCommand("""
                 WITH provider AS (
                     INSERT INTO ai_orchestration.ai_provider
-                        (provider_id, provider_name, base_url, credential_reference, status, timeout_seconds)
-                    VALUES ($1, 'NVIDIA', 'https://integrate.api.nvidia.com/v1', 'NVIDIA_API_KEY', 'INACTIVE', 30)
+                        (provider_id, provider_name, base_url, credential_reference, status, timeout_seconds, configuration)
+                    VALUES ($1, 'NVIDIA fixture', 'https://provider.example.test/catalog/v1',
+                        'CATALOG_API_KEY', 'INACTIVE', 30,
+                        '{"adapter":"nvidia","testText":"Database probe text","testMaxOutputTokens":5,"unrelated":"ignored"}')
                     RETURNING provider_id
                 )
                 INSERT INTO ai_orchestration.ai_model
@@ -60,12 +260,15 @@ public sealed class PostgresAuthFlowTests
         using var client = host.CreateClient(new WebApplicationFactoryClientOptions { BaseAddress = new Uri("https://localhost") });
 
         var providerPath = $"/api/v1/super-admin/providers/{providerId}/test";
+        var healthPath = $"/api/v1/super-admin/providers/{providerId}/health";
         var modelPath = $"/api/v1/super-admin/models/{modelId}/test";
         foreach (var path in new[] { providerPath, modelPath })
         {
             using var anonymous = await client.PostAsync(path, null);
             Assert.Equal(HttpStatusCode.Unauthorized, anonymous.StatusCode);
         }
+        using var anonymousHealth = await client.GetAsync(healthPath);
+        Assert.Equal(HttpStatusCode.Unauthorized, anonymousHealth.StatusCode);
 
         async Task SignInAsync(string email, string password)
         {
@@ -91,6 +294,8 @@ public sealed class PostgresAuthFlowTests
             using var forbidden = await client.PostAsync(path, null);
             Assert.Equal(HttpStatusCode.Forbidden, forbidden.StatusCode);
         }
+        using var forbiddenHealth = await client.GetAsync(healthPath);
+        Assert.Equal(HttpStatusCode.Forbidden, forbiddenHealth.StatusCode);
 
         await InitializePasswordAsync("super@example.test", "initial-super-passphrase", "changed-super-passphrase");
         foreach (var (resource, code) in new[] { ("providers", "PROVIDER_NOT_FOUND"), ("models", "MODEL_NOT_FOUND") })
@@ -99,6 +304,13 @@ public sealed class PostgresAuthFlowTests
             Assert.Equal(HttpStatusCode.NotFound, missing.StatusCode);
             Assert.Contains(code, await missing.Content.ReadAsStringAsync());
         }
+        using var missingHealth = await client.GetAsync($"/api/v1/super-admin/providers/{Guid.NewGuid()}/health");
+        Assert.Equal(HttpStatusCode.NotFound, missingHealth.StatusCode);
+        Assert.Equal("PROVIDER_NOT_FOUND", (await missingHealth.Content.ReadFromJsonAsync<ApiError>())?.Code);
+        var emptyHealth = (await client.GetFromJsonAsync<ProviderHealthDto>(healthPath))!;
+        Assert.Equal("unknown", emptyHealth.CurrentStatus);
+        Assert.Null(emptyHealth.AvailabilityPercent24h);
+        Assert.Null(emptyHealth.LastCheckedAt);
         Assert.Empty(diagnostics.Requests);
 
         foreach (var path in new[] { providerPath, modelPath })
@@ -115,17 +327,22 @@ public sealed class PostgresAuthFlowTests
             {
                 Assert.Equal(JsonValueKind.Null, provider.GetProperty("modelKey").ValueKind);
                 Assert.Equal(JsonValueKind.Null, provider.GetProperty("modelType").ValueKind);
+                Assert.Equal(JsonValueKind.Null, provider.GetProperty("testText").ValueKind);
             },
             model =>
             {
                 Assert.Equal("test/chat", model.GetProperty("modelKey").GetString());
                 Assert.Equal("CHAT", model.GetProperty("modelType").GetString());
+                Assert.Equal("nvidia", model.GetProperty("adapter").GetString());
+                Assert.Equal("Database probe text", model.GetProperty("testText").GetString());
+                Assert.Equal(5, model.GetProperty("testMaxOutputTokens").GetInt32());
             });
         Assert.All(diagnostics.Requests, request =>
         {
-            Assert.Equal("https://integrate.api.nvidia.com/v1", request.GetProperty("baseUrl").GetString());
-            Assert.Equal("NVIDIA_API_KEY", request.GetProperty("credentialReference").GetString());
+            Assert.Equal("https://provider.example.test/catalog/v1", request.GetProperty("baseUrl").GetString());
+            Assert.Equal("CATALOG_API_KEY", request.GetProperty("credentialReference").GetString());
             Assert.Equal(30, request.GetProperty("timeoutSeconds").GetInt32());
+            Assert.False(request.TryGetProperty("configuration", out _));
         });
 
         foreach (var (upstream, expected, code, retryable) in new[]
@@ -145,6 +362,45 @@ public sealed class PostgresAuthFlowTests
             Assert.Equal(retryable, error.Retryable);
             Assert.DoesNotContain("private upstream details", error.Message);
         }
+
+        var healthy = (await client.GetFromJsonAsync<ProviderHealthDto>(healthPath))!;
+        Assert.Equal(providerId, healthy.ProviderId);
+        Assert.Equal("healthy", healthy.CurrentStatus);
+        Assert.Equal(100.0, healthy.AvailabilityPercent24h);
+        Assert.NotNull(healthy.AverageLatencyMs24h);
+        Assert.Equal(healthy.LastSuccessfulCheckAt, healthy.LastCheckedAt);
+        Assert.Empty(healthy.RecentSafeErrorCategories);
+
+        diagnostics.Status = HttpStatusCode.GatewayTimeout;
+        using var timeout = await client.PostAsync(providerPath, null);
+        Assert.Equal(HttpStatusCode.GatewayTimeout, timeout.StatusCode);
+
+        // A private service error is recorded, but it gives no evidence about the provider.
+        diagnostics.Status = HttpStatusCode.Unauthorized;
+        using var diagnosticsUnavailable = await client.PostAsync(providerPath, null);
+        Assert.Equal(HttpStatusCode.ServiceUnavailable, diagnosticsUnavailable.StatusCode);
+        var probeCount = diagnostics.Requests.Count;
+        var unavailable = (await client.GetFromJsonAsync<ProviderHealthDto>(healthPath))!;
+        Assert.Equal("unavailable", unavailable.CurrentStatus);
+        Assert.Equal(50.0, unavailable.AvailabilityPercent24h);
+        Assert.Equal(healthy.AverageLatencyMs24h, unavailable.AverageLatencyMs24h);
+        Assert.Equal(healthy.LastSuccessfulCheckAt, unavailable.LastSuccessfulCheckAt);
+        Assert.True(unavailable.LastCheckedAt > unavailable.LastSuccessfulCheckAt);
+        Assert.Equal(UnavailableProviderErrors, unavailable.RecentSafeErrorCategories);
+        Assert.Equal(probeCount, diagnostics.Requests.Count);
+
+        const string providersPath = "/api/v1/super-admin/providers";
+        using var second = await client.PostAsJsonAsync(providersPath, new
+        {
+            providerName = "Same endpoint, second key", baseUrl = "https://provider.example.test/catalog/v1",
+            credentialReference = "CATALOG_API_KEY_2"
+        });
+        Assert.Equal(HttpStatusCode.Created, second.StatusCode);
+        var secondProvider = (await second.Content.ReadFromJsonAsync<ProviderDto>())!;
+        diagnostics.Status = HttpStatusCode.NoContent;
+        using var secondTest = await client.PostAsync($"{providersPath}/{secondProvider.ProviderId}/test", null);
+        Assert.Equal(HttpStatusCode.OK, secondTest.StatusCode);
+        Assert.Equal("CATALOG_API_KEY_2", diagnostics.Requests.Last().GetProperty("credentialReference").GetString());
     });
 
     [PostgresFact]
@@ -168,7 +424,7 @@ public sealed class PostgresAuthFlowTests
         using var second = host.CreateClient(new WebApplicationFactoryClientOptions { BaseAddress = new Uri("https://localhost") });
 
         var publicDepartments = (await first.GetFromJsonAsync<List<DepartmentDto>>("/api/v1/public/departments"))!;
-        Assert.Equal(new[] { "Biology", "Zoology" }, publicDepartments.Select(d => d.Name));
+        Assert.Equal(PublicDepartmentNames, publicDepartments.Select(d => d.Name));
 
         async Task SignInAsync(HttpClient client, string password)
         {
@@ -269,13 +525,13 @@ public sealed class PostgresAuthFlowTests
         }
 
         var departments = (await first.GetFromJsonAsync<List<DepartmentDto>>("/api/v1/super-admin/departments"))!;
-        Assert.Equal(new[] { "Accounting", "Biology", "Zoology" }, departments.Select(d => d.Name));
+        Assert.Equal(ManagedDepartmentNames, departments.Select(d => d.Name));
         var inactive = departments[0];
         Assert.Equal("INACTIVE", inactive.Status);
         Assert.Equal(inactive, await first.GetFromJsonAsync<DepartmentDto>($"/api/v1/super-admin/departments/{inactive.Id}"));
         Assert.Equal(HttpStatusCode.NotFound, (await first.GetAsync($"/api/v1/super-admin/departments/{Guid.NewGuid()}")).StatusCode);
         var domains = (await first.GetFromJsonAsync<List<DomainDto>>("/api/v1/admin/domains"))!;
-        Assert.Equal(new[] { "a.example.test", "z.example.test" }, domains.Select(d => d.DomainName));
+        Assert.Equal(ManagedDomains, domains.Select(d => d.DomainName));
         Assert.False(domains[0].IsActive);
 
         var profile = (await first.GetFromJsonAsync<MeDto>("/api/v1/me"))!;
@@ -674,6 +930,8 @@ public sealed class PostgresAuthFlowTests
                     Path.Combine(migrations, "004_routing_policies.sql"),
                     Path.Combine(migrations, "004_super_admin_feature_flags.sql"),
                     Path.Combine(migrations, "005_platform_setting_apply_flag.sql"),
+                    Path.Combine(migrations, "005_provide_health_&_Maintenanace.sql"),
+                    Path.Combine(migrations, "006_provider_diagnostic_adapters.sql"),
                     Path.Combine(migrations, "006_routing_policy_delete.sql"),
                     Path.Combine(migrations, "007_routing_policy_patch_and_deleted_reads.sql"),
                     Path.Combine(migrations, "008_routing_policy_read_shape.sql"),
@@ -706,6 +964,7 @@ public sealed class PostgresAuthFlowTests
     }
 
     private sealed record ResetTokenResponse(string ResetToken);
+    private sealed record CreatedModelResponse(Guid Id, string Status);
     private sealed record PlatformSettingDto(
         string Key, JsonElement? Value, string? Description, bool IsSensitive, bool IsApplied);
 

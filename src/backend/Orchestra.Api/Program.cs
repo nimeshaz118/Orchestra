@@ -3,6 +3,7 @@ using System.Threading.RateLimiting;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.Mvc.Controllers;
 using Microsoft.AspNetCore.Diagnostics.HealthChecks;
 using Microsoft.EntityFrameworkCore;
 using Orchestra.Api.Common;
@@ -13,6 +14,7 @@ using Orchestra.Api.Modules.Auth;
 using Orchestra.Api.Modules.Catalog;
 using Orchestra.Api.Modules.Departments;
 using Orchestra.Api.Modules.FeatureFlags;
+using Orchestra.Api.Modules.Maintenance;
 using Orchestra.Api.Modules.PlatformSettings;
 using Orchestra.Api.Modules.Users;
 using Orchestra.Api.Modules.Users.Service;
@@ -54,7 +56,11 @@ builder.Services.AddSingleton<TokenService>();
 builder.Services.AddScoped<RevokeSessionUseCase>();
 builder.Services.AddScoped<RevokeOtherSessionsUseCase>();
 builder.Services.AddScoped<ProvidersService>();
+builder.Services.AddScoped<ProviderHealthService>();
 builder.Services.AddScoped<CatalogTestsService>();
+builder.Services.AddSingleton<MaintenanceRequests>();
+builder.Services.AddScoped<MaintenanceService>();
+builder.Services.AddScoped<IMaintenanceReadiness, MaintenanceReadiness>();
 builder.Services.AddHttpClient<AiDiagnosticsClient>(client => client.Timeout = Timeout.InfiniteTimeSpan)
     .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler { AllowAutoRedirect = false, UseCookies = false });
 
@@ -136,6 +142,13 @@ builder.Services.AddRateLimiter(options =>
             PermitLimit = 5, Window = TimeSpan.FromMinutes(1), QueueLimit = 0,
             AutoReplenishment = true
         }));
+    options.AddPolicy("systemStatus", context => RateLimitPartition.GetFixedWindowLimiter(
+        context.Connection.RemoteIpAddress?.ToString() ?? "unknown",
+        _ => new FixedWindowRateLimiterOptions
+        {
+            PermitLimit = 60, Window = TimeSpan.FromMinutes(1), QueueLimit = 0,
+            AutoReplenishment = true
+        }));
 });
 
 builder.Services.Configure<ApiBehaviorOptions>(options =>
@@ -152,17 +165,23 @@ builder.Services.Configure<ApiBehaviorOptions>(options =>
                         : error.ErrorMessage)
                     .ToArray());
 
+        var maintenance = context.ActionDescriptor is ControllerActionDescriptor controller &&
+            controller.ControllerTypeInfo.AsType() == typeof(MaintenanceController);
+        var badRequest = maintenance ||
+            context.HttpContext.Request.Path.Equals("/api/v1/auth/login", StringComparison.OrdinalIgnoreCase);
         return new ObjectResult(new ApiError(
-            "VALIDATION_FAILED", "The request contains invalid fields.",
+            maintenance ? "VALIDATION_ERROR" : "VALIDATION_FAILED", "The request contains invalid fields.",
             context.HttpContext.TraceIdentifier, Errors: errors))
-        { StatusCode = context.HttpContext.Request.Path.Equals("/api/v1/auth/login", StringComparison.OrdinalIgnoreCase) ? 400 : 422 };
+        { StatusCode = badRequest ? 400 : 422 };
     };
 });
 
+const string readyHealthCheckTag = "ready";
+string[] readinessTags = [readyHealthCheckTag];
 builder.Services.AddHealthChecks()
     .AddDbContextCheck<OrchestraDbContext>(
         name: "postgresql",
-        tags: HealthCheckTags.Ready);
+        tags: readinessTags);
 
 var app = builder.Build();
 app.UseExceptionHandler(handler => handler.Run(async context =>
@@ -241,6 +260,7 @@ app.Use(async (context, next) =>
     await next();
 });
 app.UseAuthorization();
+app.UseMiddleware<MaintenanceMiddleware>();
 app.MapControllers();
 
 // Confirms that the API can respond, without checking dependencies.
@@ -252,14 +272,7 @@ app.MapHealthChecks("/health/live", new HealthCheckOptions
 // Checks PostgreSQL connectivity through OrchestraDbContext.
 app.MapHealthChecks("/health/ready", new HealthCheckOptions
 {
-    Predicate = check => check.Tags.Contains("ready")
+    Predicate = check => check.Tags.Contains(readyHealthCheckTag)
 });
 
-app.Run();
-
-public partial class Program { }
-
-internal static class HealthCheckTags
-{
-    internal static readonly string[] Ready = ["ready"];
-}
+await app.RunAsync();

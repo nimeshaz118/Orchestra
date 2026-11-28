@@ -5,6 +5,7 @@ using Npgsql;
 using Orchestra.Api.Common;
 using Orchestra.Api.Data;
 using Orchestra.Api.Models.Entities;
+using Orchestra.Api.Modules.Maintenance;
 
 namespace Orchestra.Api.Modules.PlatformSettings;
 
@@ -90,9 +91,9 @@ public sealed class PlatformSettingsService(OrchestraDbContext db, IMapper mappe
 
         if (request.AdditionalProperties is { Count: > 0 } additionalProperties)
         {
-            var errors = additionalProperties.Keys.ToDictionary(
-                field => field,
-                _ => new[] { "This field cannot be changed." });
+            var errors = new Dictionary<string, string[]>(additionalProperties.Count);
+            foreach (var field in additionalProperties.Keys)
+                errors[field] = ["This field cannot be changed."];
             throw InvalidFields(
                 "One or more platform setting fields are not editable.",
                 errors);
@@ -201,6 +202,7 @@ public sealed class PlatformSettingsService(OrchestraDbContext db, IMapper mappe
         }
 
         var settings = await db.PlatformSettings.AsNoTracking()
+            .Where(setting => setting.SettingKey != MaintenanceService.SettingKey)
             .OrderBy(setting => setting.SettingKey)
             .ToListAsync(ct);
         return mapper.Map<List<PlatformSettingDto>>(settings);
@@ -211,6 +213,8 @@ public sealed class PlatformSettingsService(OrchestraDbContext db, IMapper mappe
         var key = value?.Trim();
         if (string.IsNullOrWhiteSpace(key))
             throw InvalidField("key", "Setting key is required.");
+        if (key == MaintenanceService.SettingKey)
+            throw InvalidField("key", "This setting is managed by the maintenance endpoints.");
         if (key.Length > 120)
             throw InvalidField("key", "Setting key cannot exceed 120 characters.");
         return key;

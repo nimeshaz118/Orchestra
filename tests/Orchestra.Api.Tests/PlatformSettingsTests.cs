@@ -13,6 +13,7 @@ namespace Orchestra.Api.Tests;
 public sealed class PlatformSettingsTests
 {
     private const string Url = "/api/v1/super-admin/platform-settings";
+    private static readonly string[] SettingKeysInOrder = ["alpha.secret", "alpha.setting", "zeta.setting"];
 
     [Fact]
     public async Task Super_admin_reads_settings_in_key_order_and_sensitive_values_are_redacted()
@@ -28,9 +29,7 @@ public sealed class PlatformSettingsTests
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         var settings = await response.Content.ReadFromJsonAsync<List<PlatformSettingResponse>>();
         Assert.NotNull(settings);
-        Assert.Equal(
-            new[] { "alpha.secret", "alpha.setting", "zeta.setting" },
-            settings.Select(setting => setting.Key));
+        Assert.Equal(SettingKeysInOrder, settings.Select(setting => setting.Key));
         Assert.True(settings.All(setting => setting.IsApplied));
         Assert.True(settings[0].IsSensitive);
         Assert.Null(settings[0].Value);

@@ -1,5 +1,4 @@
 using System.Text.Json;
-using System.Text.RegularExpressions;
 using AutoMapper;
 using Microsoft.EntityFrameworkCore;
 using Npgsql;
@@ -245,7 +244,8 @@ public sealed class ProvidersService(OrchestraDbContext db, IMapper mapper)
         if (value is null) return null;
         var reference = value.Trim();
         if (reference.Length is < 1 or > 150 ||
-            !Regex.IsMatch(reference, @"^[A-Za-z_][A-Za-z0-9_]*$"))
+            !(char.IsAsciiLetter(reference[0]) || reference[0] == '_') ||
+            !reference.All(character => char.IsAsciiLetterOrDigit(character) || character == '_'))
             throw Invalid("credentialReference",
                 "Enter a secret name such as NVIDIA_API_KEY, not a secret value.");
         return reference;

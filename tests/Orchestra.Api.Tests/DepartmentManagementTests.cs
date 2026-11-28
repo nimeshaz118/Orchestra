@@ -345,6 +345,161 @@ public sealed class DepartmentManagementTests
         Assert.Equal(HttpStatusCode.Created, acceptedRegistration.StatusCode);
     }
 
+    [Fact]
+    public async Task Admin_can_enable_and_disable_department_model_eligibility_idempotently()
+    {
+        await using var host = new ApiHost();
+        var departmentId = await host.SeedDepartmentAsync("Engineering", "ACTIVE");
+        var modelId = await host.SeedModelAsync("ACTIVE");
+        await host.SeedUserAsync("admin@example.test", "ADMIN");
+        var client = await host.LoginClientAsync("admin@example.test");
+        var path = $"/api/v1/admin/configurations/{departmentId}/models/{modelId}";
+
+        var enable = await client.PostAsync($"{path}/enable", null);
+        Assert.Equal(HttpStatusCode.OK, enable.StatusCode);
+        Assert.Equal(new EligibilityResponse(departmentId, "Engineering", modelId, "Test model", true),
+            await enable.Content.ReadFromJsonAsync<EligibilityResponse>());
+
+        DateTime enabledUpdatedAt;
+        using (var scope = host.Services.CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<OrchestraDbContext>();
+            var eligibility = await db.DepartmentModels.SingleAsync();
+            var actor = await db.AppUsers.SingleAsync(u => u.Email == "admin@example.test");
+            Assert.True(eligibility.IsEnabled);
+            Assert.Equal(actor.UserId, eligibility.UpdatedByUserId);
+            enabledUpdatedAt = eligibility.UpdatedAt;
+        }
+
+        var repeatEnable = await client.PostAsync($"{path}/enable", null);
+        Assert.Equal(HttpStatusCode.OK, repeatEnable.StatusCode);
+        using (var scope = host.Services.CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<OrchestraDbContext>();
+            Assert.Equal(enabledUpdatedAt, (await db.DepartmentModels.SingleAsync()).UpdatedAt);
+        }
+
+        var disable = await client.PostAsync($"{path}/disable", null);
+        Assert.Equal(HttpStatusCode.OK, disable.StatusCode);
+        Assert.Equal(new EligibilityResponse(departmentId, "Engineering", modelId, "Test model", false),
+            await disable.Content.ReadFromJsonAsync<EligibilityResponse>());
+        using (var scope = host.Services.CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<OrchestraDbContext>();
+            var eligibility = await db.DepartmentModels.SingleAsync();
+            var actor = await db.AppUsers.SingleAsync(u => u.Email == "admin@example.test");
+            Assert.False(eligibility.IsEnabled);
+            Assert.Equal(actor.UserId, eligibility.UpdatedByUserId);
+        }
+
+        var repeatDisable = await client.PostAsync($"{path}/disable", null);
+        Assert.Equal(HttpStatusCode.OK, repeatDisable.StatusCode);
+        Assert.Equal(1, await GetEligibilityCountAsync(host));
+    }
+
+    [Fact]
+    public async Task Department_model_eligibility_rejects_missing_references_and_inactive_models()
+    {
+        await using var host = new ApiHost();
+        var departmentId = await host.SeedDepartmentAsync("Engineering", "ACTIVE");
+        var activeModelId = await host.SeedModelAsync("ACTIVE");
+        var inactiveModelId = await host.SeedModelAsync("INACTIVE");
+        var client = await SuperAdminClientAsync(host);
+
+        var missingDepartment = await client.PostAsync(
+            $"/api/v1/admin/configurations/{Guid.NewGuid()}/models/{activeModelId}/enable", null);
+        Assert.Equal(HttpStatusCode.NotFound, missingDepartment.StatusCode);
+        Assert.Equal("DEPARTMENT_NOT_FOUND",
+            (await missingDepartment.Content.ReadFromJsonAsync<ApiError>())?.Code);
+
+        var missingModel = await client.PostAsync(
+            $"/api/v1/admin/configurations/{departmentId}/models/{Guid.NewGuid()}/enable", null);
+        Assert.Equal(HttpStatusCode.NotFound, missingModel.StatusCode);
+        Assert.Equal("MODEL_NOT_FOUND",
+            (await missingModel.Content.ReadFromJsonAsync<ApiError>())?.Code);
+
+        var missingDepartmentOnDisable = await client.PostAsync(
+            $"/api/v1/admin/configurations/{Guid.NewGuid()}/models/{activeModelId}/disable", null);
+        Assert.Equal(HttpStatusCode.NotFound, missingDepartmentOnDisable.StatusCode);
+        Assert.Equal("DEPARTMENT_NOT_FOUND",
+            (await missingDepartmentOnDisable.Content.ReadFromJsonAsync<ApiError>())?.Code);
+
+        var missingModelOnDisable = await client.PostAsync(
+            $"/api/v1/admin/configurations/{departmentId}/models/{Guid.NewGuid()}/disable", null);
+        Assert.Equal(HttpStatusCode.NotFound, missingModelOnDisable.StatusCode);
+        Assert.Equal("MODEL_NOT_FOUND",
+            (await missingModelOnDisable.Content.ReadFromJsonAsync<ApiError>())?.Code);
+
+        var inactiveModel = await client.PostAsync(
+            $"/api/v1/admin/configurations/{departmentId}/models/{inactiveModelId}/enable", null);
+        Assert.Equal(HttpStatusCode.Conflict, inactiveModel.StatusCode);
+        Assert.Equal("MODEL_NOT_ACTIVE",
+            (await inactiveModel.Content.ReadFromJsonAsync<ApiError>())?.Code);
+        Assert.Equal(0, await GetEligibilityCountAsync(host));
+
+        using (var scope = host.Services.CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<OrchestraDbContext>();
+            var now = DateTime.UtcNow;
+            db.DepartmentModels.Add(new()
+            {
+                DepartmentId = departmentId,
+                ModelId = inactiveModelId,
+                IsEnabled = true,
+                CreatedAt = now,
+                UpdatedAt = now
+            });
+            await db.SaveChangesAsync();
+        }
+
+        var disableInactiveModel = await client.PostAsync(
+            $"/api/v1/admin/configurations/{departmentId}/models/{inactiveModelId}/disable", null);
+        Assert.Equal(HttpStatusCode.OK, disableInactiveModel.StatusCode);
+        Assert.Equal(new EligibilityResponse(
+                departmentId, "Engineering", inactiveModelId, "Test model", false),
+            await disableInactiveModel.Content.ReadFromJsonAsync<EligibilityResponse>());
+        using (var scope = host.Services.CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<OrchestraDbContext>();
+            Assert.False((await db.DepartmentModels.SingleAsync()).IsEnabled);
+        }
+
+        var disableMissingEligibility = await client.PostAsync(
+            $"/api/v1/admin/configurations/{departmentId}/models/{activeModelId}/disable", null);
+        Assert.Equal(HttpStatusCode.OK, disableMissingEligibility.StatusCode);
+        Assert.Equal(new EligibilityResponse(
+                departmentId, "Engineering", activeModelId, "Test model", false),
+            await disableMissingEligibility.Content.ReadFromJsonAsync<EligibilityResponse>());
+        Assert.Equal(1, await GetEligibilityCountAsync(host));
+    }
+
+    [Fact]
+    public async Task Regular_user_cannot_change_department_model_eligibility()
+    {
+        await using var host = new ApiHost();
+        var departmentId = await host.SeedDepartmentAsync("Engineering", "ACTIVE");
+        var modelId = await host.SeedModelAsync("ACTIVE");
+        await host.SeedUserAsync("user@example.test", "USER");
+        var client = await host.LoginClientAsync("user@example.test");
+        var path = $"/api/v1/admin/configurations/{departmentId}/models/{modelId}";
+
+        var enable = await client.PostAsync($"{path}/enable", null);
+        Assert.Equal(HttpStatusCode.Forbidden, enable.StatusCode);
+        Assert.Equal("FORBIDDEN", (await enable.Content.ReadFromJsonAsync<ApiError>())?.Code);
+
+        var disable = await client.PostAsync($"{path}/disable", null);
+        Assert.Equal(HttpStatusCode.Forbidden, disable.StatusCode);
+        Assert.Equal("FORBIDDEN", (await disable.Content.ReadFromJsonAsync<ApiError>())?.Code);
+        Assert.Equal(0, await GetEligibilityCountAsync(host));
+    }
+
+    private static async Task<int> GetEligibilityCountAsync(ApiHost host)
+    {
+        using var scope = host.Services.CreateScope();
+        return await scope.ServiceProvider.GetRequiredService<OrchestraDbContext>()
+            .DepartmentModels.CountAsync();
+    }
+
     private static async Task<HttpClient> SuperAdminClientAsync(ApiHost host)
     {
         await host.SeedUserAsync("super@example.test", "SUPER_ADMIN");
@@ -352,4 +507,6 @@ public sealed class DepartmentManagementTests
     }
 
     private sealed record DepartmentResponse(Guid Id, string Name, string? Description, string Status);
+    private sealed record EligibilityResponse(
+        Guid DepartmentId, string DepartmentName, Guid ModelId, string ModelName, bool IsEnabled);
 }
